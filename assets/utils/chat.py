@@ -61,22 +61,24 @@ class User:
 
 class Conversation:
     """A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts."""
-    def __init__(self, conversation_path, limit=5) -> None:
-        with open(os.path.join(conversation_path, "intro.txt")) as f:
+    def __init__(self, character, limit=5) -> None:
+        with open(os.path.join(character["path"], "intro.txt")) as f:
             self.intro = f.read()
-        with open(os.path.join(conversation_path, "conversation.txt")) as f:
+        with open(os.path.join(character["path"], "conversation.txt")) as f:
             self.prior_conv = f.read()
         
         self.conv = deque(maxlen=limit)
+        self.character = character
+        self.name = character["name"]
     
     def render(self):
         active_conv = ""
         for p, c in self.conv:
-            active_conv += f"人類: {p}\n後藤一里: {c}\n"
+            active_conv += f"人類: {p}\n{self.name}: {c}\n"
         return self.intro + self.prior_conv + active_conv
     
     def prepare_prompt(self, prompt):
-        return self.render() + f"人類: {prompt}\n後藤一里: "
+        return self.render() + f"人類: {prompt}\n{self.name}: "
     
     def append_conversation(self, prompt, message):
         self.conv.append((prompt, message))

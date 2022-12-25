@@ -188,7 +188,6 @@ class GPT3Helper(commands.Cog):
 
         logger.debug(f"Creating thread to chat with {view.value} for {ctx.author.name}")
         character_name = character_info[view.value]["name"]
-        character_path = character_info[view.value]["path"]
         character_greeting = character_info[view.value]["greeting"]
         
         thread_name = ctx.author.name + f" 與{character_name}的聊天室"
@@ -199,7 +198,7 @@ class GPT3Helper(commands.Cog):
         )
         await message_thread.edit(content=f"聊天室已創建！")
 
-        self.chatting_users[ctx.author.id] = User(ctx.author.id, character_path)
+        self.chatting_users[ctx.author.id] = User(ctx.author.id, character_info[view.value])
         self.chatting_threads[ctx.author.id] = thread.id
 
         await thread.send(character_greeting)
