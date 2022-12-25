@@ -1,0 +1,21 @@
+{
+	"Cog": {
+		"prefix": "cog",
+		"body": [
+			"\"\"\"",
+			"$1 commands cog.",
+			"\"\"\"",
+			"",
+			"from discord.ext import commands",
+			"",
+			"class $1Cog(commands.Cog):",
+			"",
+			"    def __init__(self, bot):",
+			"        self.bot = bot",
+			"",
+			"async def setup(client):",
+			"    await client.add_cog($1Cog(client))"
+		],
+		"description": "Generates a cog with a specific name plus Cog"
+	}
+}
