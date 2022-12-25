@@ -3,16 +3,19 @@ This file contains a cog for the GPT-3 helper commands.
 """
 
 import os
+import json
 import asyncio
 import openai
 import discord
 from discord.ext import commands
 from typing import List, Optional
 from collections import deque
-from assets.utils.chat import User, Conversation, generate_conversation, get_token_len
+from assets.utils.chat import CharacterSelectMenuView, User, Conversation, generate_conversation, get_token_len
 import assets.settings.setting as setting
 
-DEBUG = 0
+DEBUG = 1
+
+character_info = json.load(open("assets/settings/character_info.json", "r", encoding="utf-8"))
 
 logger = setting.logging.getLogger("gpt3")
 
@@ -166,18 +169,29 @@ class GPT3Helper(commands.Cog):
             os.remove(tmp)
 
 
-    @commands.hybrid_command(name="chat", description="開啟一個討論串來和小孤獨聊天！")
+    @commands.hybrid_command(name="chat", description="開啟一個討論串來和不同角色聊天！")
     async def _chat(self, ctx):
         await ctx.defer()
 
         if ctx.author.id in self.chatting_users:
             await self.end_conversation(ctx)
-            await ctx.send("已結束與小孤獨的對話！")
+            await ctx.send("已結束對話")
             return
 
-        logger.debug(f"Creating thread for {ctx.author.name}")
+        # Make a discord select menu view for the user to choose the character to chat with
+        view = CharacterSelectMenuView(ctx.author)
+        await ctx.send("請選擇一個角色來和他聊天！", view=view)
+        await view.wait()
+        if view.value == None:
+            logger.info("Character selection view timeout")
+            return
+
+        logger.debug(f"Creating thread to chat with {view.value} for {ctx.author.name}")
+        character_name = character_info[view.value]["name"]
+        character_path = character_info[view.value]["path"]
+        character_greeting = character_info[view.value]["greeting"]
         
-        thread_name = ctx.author.name + " 與小孤獨的聊天室"
+        thread_name = ctx.author.name + f" 與{character_name}的聊天室"
         message_thread = await ctx.channel.send(f"正在創建聊天室...")
         thread = await message_thread.create_thread(
             name=thread_name,
@@ -185,10 +199,10 @@ class GPT3Helper(commands.Cog):
         )
         await message_thread.edit(content=f"聊天室已創建！")
 
-        self.chatting_users[ctx.author.id] = User(ctx.author.id)
+        self.chatting_users[ctx.author.id] = User(ctx.author.id, character_path)
         self.chatting_threads[ctx.author.id] = thread.id
 
-        await thread.send("你好...")
+        await thread.send(character_greeting)
     
     async def close_thread(self, id):
         try:

@@ -1,0 +1,26 @@
+{
+    "Koto": {
+        "path": "assets/conversations/Koto",
+        "name": "後藤一里",
+        "description": "日本動畫\"孤獨搖滾\"的主角",
+        "greeting": "你好..."
+    },
+    "Nijika": {
+        "path": "assets/conversations/Nijika",
+        "name": "伊地知虹夏",
+        "description": "日本動畫\"孤獨搖滾\"當中，團結Band的鼓手",
+        "greeting": "你好！"
+    },
+    "Ryou": {
+        "path": "assets/conversations/Ryou",
+        "name": "山田涼",
+        "description": "日本動畫\"孤獨搖滾\"當中，團結Band的貝斯手",
+        "greeting": "你好"
+    },
+    "Kita": {
+        "path": "assets/conversations/Kita",
+        "name": "喜多郁代",
+        "description": "日本動畫\"孤獨搖滾\"當中，團結Band的主唱",
+        "greeting": "你好！"
+    }
+}
