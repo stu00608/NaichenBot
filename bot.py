@@ -9,6 +9,7 @@ and its activity to "online" when it starts.
 import os
 import logging
 import discord
+import argparse
 from discord.ext import commands, tasks
 from datetime import datetime
 import asyncio
@@ -22,17 +23,17 @@ NIGHT_TIME = "18:00"
 
 
 class Bot(commands.Bot):
-    def __init__(self):
+    def __init__(self, debug: bool = False):
+        self.debug = debug
+
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True
-        
-        description = "Naichen bot."
 
         super().__init__(
             command_prefix=commands.when_mentioned_or('!'), 
             intents=intents,
-            description=description,
+            description="Naichen bot.",
             activity=discord.Activity(type=discord.ActivityType.listening, name="後藤さんの呪いだわ..."),
             status=discord.Status.online
         )
@@ -93,7 +94,6 @@ class Bot(commands.Bot):
         elif now == NIGHT_TIME and bot.day_night_state == "day":
             bot.switch_avatar(is_day=False)
 
-bot = Bot()
 
 async def load_extensions():
     """Load all extensions in ./cogs/"""
@@ -102,4 +102,9 @@ async def load_extensions():
 		    await bot.load_extension("cogs." + f[:-3])
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode. (Default: False)')
+    args = parser.parse_args()
+
+    bot = Bot(debug=args.debug)
     bot.run(token, root_logger=True)

@@ -13,8 +13,6 @@ from collections import deque
 from assets.utils.chat import CharacterSelectMenuView, User, Conversation, generate_conversation, get_token_len
 import assets.settings.setting as setting
 
-DEBUG = 1
-
 character_info = json.load(open("assets/settings/character_info.json", "r", encoding="utf-8"))
 
 logger = setting.logging.getLogger("gpt3")
@@ -118,7 +116,7 @@ class GPT3Helper(commands.Cog):
 
             try:
                 async with message.channel.typing():
-                    if DEBUG:
+                    if self.bot.debug:
                         completion = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
                     else:
                         completion = await generate_conversation(prompt)
