@@ -137,12 +137,13 @@ class GPT3Helper(commands.Cog):
                 return
 
             user.conversation.append_conversation(message.content, completion)
+            await message.reply(completion)
+
+            # If the bot reply with "掰掰", end the conversation
             if "掰掰" in completion:
-                # If the bot reply with "再見", end the conversation
+                logger.debug("Quitting Chat...")
                 await asyncio.sleep(3)
                 await self.end_conversation(message)
-            else:
-                await message.reply(completion)
 
         
     @commands.command(name="delete_all_threads")
@@ -151,6 +152,7 @@ class GPT3Helper(commands.Cog):
         try:
             for thread in ctx.channel.threads:
                 await thread.delete()
+            logger.debug("Deleted all threads.")
             await ctx.send("成功刪除所有討論串！")
             return True
         except Exception as e:
