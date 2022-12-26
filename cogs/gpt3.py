@@ -90,6 +90,7 @@ class GPT3Helper(commands.Cog):
 
         self.chatting_users = {}
         self.chatting_threads = {}
+        self.chatting_start_message = {}
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -105,26 +106,44 @@ class GPT3Helper(commands.Cog):
             # message is from a chatting user
 
             user = self.chatting_users[message.author.id]
-            prompt = user.history.prepare_prompt(message.content)
+            prompt = user.conversation.prepare_prompt(message.content)
 
-            logger.debug(f"Total Tokens: {get_token_len(prompt)}")
-            logger.debug(f"\n\n{prompt}\n\n")
-            if get_token_len(prompt) > 2500:
-                await message.reply("對話已經超過 2500 個token，請重新開始一個新的對話。")
+            if self.bot.debug:
+                logger.debug(f"Total Tokens: {get_token_len(prompt)}")
+                logger.debug(f"\n\n{prompt}\n\n")
+
+            if get_token_len(prompt) > 3500:
+                await message.reply("對話已經超過 3500 個token，請重新開始一個新的對話。")
                 await self.end_conversation(message)
                 return
 
             try:
                 async with message.channel.typing():
                     if self.bot.debug:
-                        completion = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
+                        if message.content == "掰掰":
+                            # Debuging chat exit function
+                            completion = "掰掰"
+                        else:
+                            # Debuging reply function
+                            completion = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
                     else:
                         completion = await generate_conversation(prompt)
-                user.history.append_conversation(message.content, completion)
-                await message.reply(completion)
             except Exception as e:
                 logger.error(f"Failed to generate conversation: {e}")
                 await message.reply(f"生成對話時發生錯誤：{e}")
+            
+            if completion == "":
+                await message.reply("沒有生成任何回應。")
+                return
+
+            user.conversation.append_conversation(message.content, completion)
+            if "掰掰" in completion:
+                # If the bot reply with "再見", end the conversation
+                await asyncio.sleep(3)
+                await self.end_conversation(message)
+            else:
+                await message.reply(completion)
+
         
     @commands.command(name="delete_all_threads")
     @commands.has_permissions(administrator=True)
@@ -166,15 +185,13 @@ class GPT3Helper(commands.Cog):
             await asyncio.sleep(3)
             os.remove(tmp)
 
-
     @commands.hybrid_command(name="chat", description="開啟一個討論串來和不同角色聊天！")
     async def _chat(self, ctx):
         await ctx.defer()
 
         if ctx.author.id in self.chatting_users:
             await self.end_conversation(ctx)
-            await ctx.send("已結束對話")
-            return
+            await asyncio.sleep(2)
 
         # Make a discord select menu view for the user to choose the character to chat with
         view = CharacterSelectMenuView(ctx.author)
@@ -196,16 +213,17 @@ class GPT3Helper(commands.Cog):
         )
         await message_thread.edit(content=f"聊天室已創建！")
 
-        self.chatting_users[ctx.author.id] = User(ctx.author.id, character_info[view.value])
+        self.chatting_users[ctx.author.id] = User(ctx.author.id, view.value, debug=self.bot.debug)
         self.chatting_threads[ctx.author.id] = thread.id
+        self.chatting_start_message[ctx.author.id] = message_thread
 
         await thread.send(character_greeting)
     
     async def close_thread(self, id):
+        """Delete the thread"""
         try:
             thread = await self.bot.fetch_channel(id)
-            await thread.edit(locked=True)
-            await thread.edit(name="已關閉聊天室")
+            await thread.delete()
             return True
         except Exception as e:
             logger.error(f"Failed to close thread {id} with error {e}")
@@ -214,6 +232,9 @@ class GPT3Helper(commands.Cog):
     async def end_conversation(self, message):
         if message.author.id in self.chatting_threads:
             thread_id = self.chatting_threads[message.author.id]
+            await self.chatting_start_message[message.author.id].edit(content="聊天室已關閉！")
+
+            del self.chatting_start_message[message.author.id]
             del self.chatting_users[message.author.id]
             del self.chatting_threads[message.author.id]
             # Attempt to close and lock the thread.
