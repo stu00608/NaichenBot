@@ -86,7 +86,8 @@ async def generate_py_code_file_name(code):
             prompt=prompt,
             max_tokens=50,
             n=1,
-            temperature=0.7
+            temperature=0.7,
+            stop=["\n", " "] 
         )
     except Exception as e:
         logger.error(f"Error: OpenAI API request failed. Please try again later.\n\n{e}")

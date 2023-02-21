@@ -22,5 +22,11 @@
         "name": "喜多郁代",
         "description": "日本動畫\"孤獨搖滾\"當中，團結Band的主唱",
         "greeting": "你好！"
+    },
+    "Shen": {
+        "path": "assets/conversations/Shen",
+        "name": "沈奕辰",
+        "description": "可以聽你傾訴煩惱的奶辰",
+        "greeting": "嗨～"
     }
 }
