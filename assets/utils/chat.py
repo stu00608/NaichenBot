@@ -2,6 +2,7 @@ import os
 import json
 import openai
 import discord
+from datetime import datetime
 from collections import deque
 from transformers import GPT2TokenizerFast
 from asgiref.sync import sync_to_async
@@ -39,9 +40,9 @@ class CharacterSelectMenuView(discord.ui.View):
         self.stop()        
 
 class User:
-    def __init__(self, id, conversation_path):
+    def __init__(self, id, conversation_path, debug=False):
         self.id = id
-        self.history = Conversation(conversation_path, 5)
+        self.conversation = Conversation(id, conversation_path, limit=5, debug=debug)
         self.count = 0
 
     # These user objects should be accessible by ID, for example if we had a bunch of user
@@ -54,34 +55,58 @@ class User:
         return hash(self.id)
 
     def __repr__(self):
-        return f"User(id={self.id}, history={self.history})"
+        return f"User(id={self.id}, Conversation={self.conversation})"
 
     def __str__(self):
         return self.__repr__()
 
 class Conversation:
-    """A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts."""
-    def __init__(self, character, limit=5) -> None:
-        with open(os.path.join(character["path"], "intro.txt")) as f:
+    """
+    A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts.
+    
+    Parameters:
+    - user (User): The user id that this conversation is associated with.
+    - character (str): The character value (Koto, Nijika...) that the user is chatting with.
+    - limit (int): The maximum number of messages to store in the conversation deque history.
+    - debug (bool): Don't record conversation history if debug.
+    """
+    def __init__(self, user, character, limit=5, debug=False) -> None:
+        with open(os.path.join(character_info[character]["path"], "intro.txt")) as f:
             self.intro = f.read()
-        with open(os.path.join(character["path"], "conversation.txt")) as f:
+        with open(os.path.join(character_info[character]["path"], "conversation.txt")) as f:
             self.prior_conv = f.read()
         
+        self.debug = debug
         self.conv = deque(maxlen=limit)
-        self.character = character
-        self.name = character["name"]
+        self.conv_history = []
+        self.label = f"{user}-{character}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.name = character_info[character]["name"]
     
     def render(self):
         active_conv = ""
         for p, c in self.conv:
-            active_conv += f"人類: {p}\n{self.name}: {c}\n"
+            active_conv += self.render_conversation(p, c)
         return self.intro + self.prior_conv + active_conv
+    
+    def render_conversation(self, prompt, message):
+        return f"人類: {prompt}\n{self.name}: {message}\n"
     
     def prepare_prompt(self, prompt):
         return self.render() + f"人類: {prompt}\n{self.name}: "
     
     def append_conversation(self, prompt, message):
         self.conv.append((prompt, message))
+        self.conv_history.append((prompt, message))
+        if not self.debug:
+            self.write_log()
+    
+    def write_log(self):
+        conv = ""
+        for p, c in self.conv_history:
+            conv += self.render_conversation(p, c)
+
+        with open(f"assets/logs/conv_history/{self.label}.txt", "w", encoding="utf-8") as f:
+            f.write(conv)
     
     def __len__(self):
         return get_token_len(self.render())
