@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 from typing import List, Optional
 from collections import deque
-from assets.utils.chat import CharacterSelectMenuView, User, Conversation, generate_conversation, get_token_len
+from assets.utils.chat import CharacterSelectMenuView, User, Conversation, generate_conversation, num_tokens_from_messages
 import assets.settings.setting as setting
 
 character_info = json.load(open("assets/settings/character_info.json", "r", encoding="utf-8"))
@@ -140,7 +140,13 @@ class GPT3Helper(commands.Cog):
             prompt = user.conversation.prepare_prompt(message.content)
 
             if self.bot.debug:
-                logger.debug(f"\n\n{prompt}\n\n")
+                logger.debug(f"\n\n{user.conversation}\n\n")
+                logger.debug(f"Tokens: {num_tokens_from_messages(prompt)}")
+            
+            if num_tokens_from_messages(prompt) > 3500:
+                await message.reply("對話過長，請重新開始對話。")
+                await self.end_conversation(message)
+                return
 
             try:
                 async with message.channel.typing():
