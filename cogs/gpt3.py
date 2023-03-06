@@ -140,13 +140,7 @@ class GPT3Helper(commands.Cog):
             prompt = user.conversation.prepare_prompt(message.content)
 
             if self.bot.debug:
-                logger.debug(f"Total Tokens: {get_token_len(prompt)}")
                 logger.debug(f"\n\n{prompt}\n\n")
-
-            if get_token_len(prompt) > 3500:
-                await message.reply("對話已經超過 3500 個token，請重新開始一個新的對話。")
-                await self.end_conversation(message)
-                return
 
             try:
                 async with message.channel.typing():
@@ -167,7 +161,7 @@ class GPT3Helper(commands.Cog):
                 await message.reply("沒有生成任何回應。")
                 return
 
-            user.conversation.append_conversation(message.content, completion)
+            user.conversation.append_response(completion)
             await message.reply(completion)
 
             # If the bot reply with "掰掰", end the conversation
