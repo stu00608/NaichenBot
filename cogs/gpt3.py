@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 from typing import List, Optional
 from collections import deque
-from assets.utils.chat import CharacterSelectMenuView, User, Conversation, generate_conversation, num_tokens_from_messages
+from assets.utils.chat import CharacterSelectMenuView, User, CharacterConversation, generate_conversation, num_tokens_from_messages
 import assets.settings.setting as setting
 
 character_info = json.load(

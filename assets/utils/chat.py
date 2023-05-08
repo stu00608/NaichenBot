@@ -1,6 +1,7 @@
 import os
 import json
 import openai
+import random
 import discord
 import tiktoken
 from datetime import datetime
@@ -43,7 +44,7 @@ class CharacterSelectMenuView(discord.ui.View):
 class User:
     def __init__(self, id, conversation_path, debug=False):
         self.id = id
-        self.conversation = Conversation(
+        self.conversation = CharacterConversation(
             id, conversation_path, limit=5, debug=debug)
         self.count = 0
 
@@ -71,14 +72,65 @@ class Conversation:
     - messages (list): A list of messages for sending api request to OpenAI gpt-3.5-turbo.
     """
 
-    def __init__(self, user, character, limit=5, debug=False) -> None:
+    def __init__(self, limit=10, debug=False) -> None:
         self.debug = debug
-        self.label = f"{user}-{character}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # generate random string txt file name
+        dummy_file_name = ''.join(random.choices(
+            "abcdefghijklmnopqrstuvwxyz", k=10))
+        self.log_path = f"assets/logs/conv_history/{dummy_file_name}.txt"
+        self.system_messages = None
+        self.messages = deque(maxlen=limit)
+
+    def init_system_message(self, message):
+        self.system_messages = {"role": "system", "content": message}
+        self._write_log()
+
+    def prepare_prompt(self, prompt):
+        '''Get the user input and append it to prompt body. Return the prompt body.'''
+        if self.system_messages is None:
+            raise Exception("System message not found.")
+        self.messages.append({"role": "user", "content": prompt})
+        self._write_log()
+        return [self.system_messages] + list(self.messages)
+
+    def append_response(self, response):
+        '''Get the assistant response and append it to prompt body.'''
+        if self.system_messages is None:
+            raise Exception("System message not found.")
+        self.messages.append({"role": "assistant", "content": response})
+        self._write_log()
+
+    def _write_log(self):
+        with open(self.log_path, "w", encoding="utf-8") as f:
+            json.dump([self.system_messages] + list(self.messages),
+                      f, indent=4, ensure_ascii=False)
+
+    def __len__(self):
+        return num_tokens_from_messages(list(self.messages))
+
+    def __repr__(self) -> str:
+        return json.dumps(list(self.messages), indent=4, ensure_ascii=False)
+
+    def __str__(self) -> str:
+        return json.dumps(list(self.messages), indent=4, ensure_ascii=False)
+
+
+class CharacterConversation(Conversation):
+    """
+    A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts.
+
+    Attributes:
+    - messages (list): A list of messages for sending api request to OpenAI gpt-3.5-turbo.
+    """
+
+    def __init__(self, user, character, limit=10, debug=False) -> None:
+        super().__init__(limit, debug)
+        label = f"{user}-{character}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.log_path = f"assets/logs/conv_history/{label}.txt"
         self.name = character_info[character]["name"]
-        self.messages = []
 
         with open(os.path.join(character_info[character]["path"], "intro.txt")) as f:
-            self.messages.append({"role": "system", "content": f.read()})
+            self.init_system_message(f.read())
         with open(os.path.join(character_info[character]["path"], "conversation.txt")) as f:
             example_chats = f.read().splitlines()
             for chat in example_chats:
@@ -87,30 +139,6 @@ class Conversation:
                     {"role": "user", "content": u.strip("\n")})
                 self.messages.append(
                     {"role": "assistant", "content": a.strip("\n")})
-
-    def prepare_prompt(self, prompt):
-        '''Get the user input and append it to prompt body. Return the prompt body.'''
-        self.messages.append({"role": "user", "content": prompt})
-        self._write_log()
-        return self.messages
-
-    def append_response(self, response):
-        '''Get the assistant response and append it to prompt body.'''
-        self.messages.append({"role": "assistant", "content": response})
-        self._write_log()
-
-    def _write_log(self):
-        with open(f"assets/logs/conv_history/{self.label}.txt", "w", encoding="utf-8") as f:
-            json.dump(self.messages, f, indent=4, ensure_ascii=False)
-
-    def __len__(self):
-        return num_tokens_from_messages(self.messages)
-
-    def __repr__(self) -> str:
-        return json.dumps(self.messages, indent=4, ensure_ascii=False)
-
-    def __str__(self) -> str:
-        return json.dumps(self.messages, indent=4, ensure_ascii=False)
 
 
 def num_tokens_from_messages(messages, model="gpt-3.5-turbo"):
