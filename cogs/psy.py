@@ -9,14 +9,14 @@ import openai
 import discord
 from discord.ui import View, Button
 from discord.ext import commands
-from typing import List, Optional
-from collections import deque
 from assets.utils.chat import User, Conversation, generate_conversation, num_tokens_from_messages
 import assets.settings.setting as setting
 
 logger = setting.logging.getLogger("psy")
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# TODO: Make the chat response load in stream.
 
 
 class PsyGPT(commands.Cog):
@@ -32,6 +32,7 @@ class PsyGPT(commands.Cog):
         self.load_database()
         self.load_questions()
 
+        self.questionnaire_threads = {}
         self.chatting_threads = {}
 
     def load_questions(self):
@@ -64,9 +65,9 @@ class PsyGPT(commands.Cog):
         if not ctx.guild:
             # message is from a dm
             return
-        if ctx.author.id in self.chatting_threads \
-                and ctx.channel.id == self.chatting_threads[ctx.author.id]["thread_id"]:
-            # message is from a chatting user
+        if ctx.author.id in self.questionnaire_threads \
+                and ctx.channel.id == self.questionnaire_threads[ctx.author.id]["thread_id"]:
+            # Questionnaire thread
 
             # Delete any message inside this thread that is not belong to the bot or the user.
             async for msg in ctx.channel.history(limit=None, oldest_first=True):
@@ -74,7 +75,7 @@ class PsyGPT(commands.Cog):
                     await msg.delete()
 
             user_discriminator = ctx.author.name + "#" + ctx.author.discriminator
-            if self.chatting_threads[ctx.author.id]["counter"] == len(self.questions):
+            if self.questionnaire_threads[ctx.author.id]["counter"] == len(self.questions):
                 # Make a list of all user messages in this thread in order.
                 user_messages = []
                 async for msg in ctx.channel.history(limit=None, oldest_first=True):
@@ -88,18 +89,66 @@ class PsyGPT(commands.Cog):
                 }
                 self.write_database()
                 # Delete this user in chatting_thread
-                del self.chatting_threads[ctx.author.id]
+                del self.questionnaire_threads[ctx.author.id]
 
                 logger.info(f"Saved user {user_discriminator}'s data.")
 
                 # TODO: Analyze the answers here.
+                self.database[user_discriminator]["chat_system_message"] = "你是一位熱於助人的AI助理，你的名字叫做奶辰，你是一位軟體工程師，若人類詢問你和軟體技術相關的問題，請你將人類的需求拆成一個個小問題，並且將這些問題的答案組合起來成最佳解答，回答人類的問題，並且告訴人類為何你的答案是最佳解答。確保你的答案是正確的，並且不會對人類造成傷害。若人類與你道別，請一律回答“掰掰”。若遇到專有名詞可以使用原文並以繁體中文解釋輔助，其餘請全程使用繁體中文回答。"
+                self.write_database()
 
                 await ctx.channel.send("分析已完成！將於5秒後自動關閉此討論串。")
                 await asyncio.sleep(5)
                 await self.close_thread(ctx.channel.id)
             else:
-                await ctx.channel.send(self.questions[self.chatting_threads[ctx.author.id]["counter"]])
-                self.chatting_threads[ctx.author.id]["counter"] += 1
+                await ctx.channel.send(self.questions[self.questionnaire_threads[ctx.author.id]["counter"]])
+                self.questionnaire_threads[ctx.author.id]["counter"] += 1
+
+        elif ctx.author.id in self.chatting_threads \
+                and ctx.channel.id == self.chatting_threads[ctx.author.id]["thread_id"]:
+            # Chatting thread
+
+            conv = self.chatting_threads[ctx.author.id]["conversation"]
+            prompt = conv.prepare_prompt(ctx.content)
+
+            if self.bot.debug:
+                logger.debug(f"\n\n{conv}\n\n")
+                logger.debug(f"Tokens: {num_tokens_from_messages(prompt)}")
+
+            if num_tokens_from_messages(prompt) > 3500:
+                await ctx.reply("對話過長，請重新開始對話。")
+                del self.chatting_threads[ctx.author.id]
+                await self.close_thread(ctx.channel.id)
+                return
+
+            try:
+                async with ctx.channel.typing():
+                    if self.bot.debug:
+                        if ctx.content == "掰掰":
+                            # Debuging chat exit function
+                            completion = "掰掰"
+                        else:
+                            # Debuging reply function
+                            completion = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
+                    else:
+                        completion = await generate_conversation(prompt)
+            except Exception as e:
+                logger.error(f"Failed to generate conversation: {e}")
+                await ctx.reply(f"生成對話時發生錯誤：{e}")
+
+            if completion == "":
+                await ctx.reply("沒有生成任何回應。")
+                return
+
+            conv.append_response(completion)
+            await ctx.channel.send(completion)
+
+            # If the bot reply with "掰掰", end the conversation
+            if "掰掰" in completion:
+                logger.debug("Quitting Chat...")
+                await asyncio.sleep(3)
+                del self.chatting_threads[ctx.author.id]
+                await self.close_thread(ctx.channel.id)
 
     @commands.command(name="update_psygpt_api_key")
     @commands.has_permissions(administrator=True)
@@ -154,13 +203,13 @@ class PsyGPT(commands.Cog):
                 await message.edit(content="請重新輸入指令。", view=None)
 
         # Check if the user has already started a conversation in a thread. If yes, send a message that mention the thread to the user.
-        if user_id in self.chatting_threads:
-            thread_id = self.chatting_threads[user_id]
+        if user_id in self.questionnaire_threads:
+            thread_id = self.questionnaire_threads[user_id]
             try:
                 thread = await self.bot.fetch_channel(thread_id)
             except Exception as e:
                 # If the thread has been deleted, remove the thread from the dictionary.
-                del self.chatting_threads[user_id]
+                del self.questionnaire_threads[user_id]
                 await ctx.send("請重新開始一次分析。")
                 return
             await ctx.send(f"你已經在 <#{thread.id}> 裡面開始了分析。")
@@ -169,13 +218,59 @@ class PsyGPT(commands.Cog):
         thread = await ctx.channel.create_thread(
             name=f"{ctx.author.name} 的分析", auto_archive_duration=60)
         await ctx.send(f"已開始分析，請在 <#{thread.id}> 裡面回答問題。")
-        self.chatting_threads[user_id] = {
+        self.questionnaire_threads[user_id] = {
             "thread_id": thread.id,
             "counter": 0
         }
 
         await thread.send(self.questions[0])
-        self.chatting_threads[user_id]["counter"] += 1
+        self.questionnaire_threads[user_id]["counter"] += 1
+
+    @commands.hybrid_command(name="self_chat", description="Chat with you. Yes, you.")
+    async def _self_chat(self, ctx):
+        await ctx.defer()
+        user_id = ctx.author.id
+        user_discriminator = ctx.author.name + "#" + ctx.author.discriminator
+
+        ids_in_database = [self.database[user]["id"] for user in self.database]
+        if user_id not in ids_in_database:
+            await ctx.send("你還沒有進行分析！")
+            return
+
+        thread_name = ctx.author.name + f"{user_discriminator} 與自己的聊天室"
+        thread = await ctx.channel.create_thread(
+            name=thread_name,
+            auto_archive_duration=60,
+        )
+        await ctx.send(f"已開始聊天，請在 <#{thread.id}> 裡面開始聊天。")
+
+        self.load_database()
+        conversation = Conversation()
+        conversation.init_system_message(
+            self.database[user_discriminator]["chat_system_message"])
+        self.chatting_threads[ctx.author.id] = {
+            "thread_id": thread.id,
+            "conversation": conversation
+        }
+
+    @commands.hybrid_command(name="report", description="Get your personality report.")
+    async def _report(self, ctx):
+        """Return the user's personality report by dm."""
+        await ctx.defer()
+
+        user_id = ctx.author.id
+
+        ids_in_database = [self.database[user]["id"] for user in self.database]
+        if user_id not in ids_in_database:
+            await ctx.send("你還沒有進行分析！")
+            return
+
+        user_discriminator = ctx.author.name + "#" + ctx.author.discriminator
+        user_data = self.database[user_discriminator]["answers"]
+
+        await ctx.author.send(user_data)
+
+        await ctx.send("已將分析結果私訊給你。")
 
     async def close_thread(self, id):
         """Delete the thread"""
