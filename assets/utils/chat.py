@@ -1,15 +1,16 @@
 import os
 import json
 import openai
+import random
 import discord
+import tiktoken
 from datetime import datetime
 from collections import deque
-from transformers import GPT2TokenizerFast
 from asgiref.sync import sync_to_async
 
-tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+character_info = json.load(
+    open("assets/settings/character_info.json", "r", encoding="utf-8"))
 
-character_info = json.load(open("assets/settings/character_info.json", "r", encoding="utf-8"))
 
 class CharacterSelectMenuView(discord.ui.View):
     def __init__(self, author):
@@ -23,26 +24,28 @@ class CharacterSelectMenuView(discord.ui.View):
         if interaction.user != self.author:
             await interaction.response.send_message(content="僅限發送指令的使用者選擇", ephemeral=True)
             return False
-        return True     
-    
+        return True
+
     """A select menu for the user to choose the character to chat with"""
     @discord.ui.select(
         placeholder="請選擇",
-        options = [discord.SelectOption(
-            label=character_info[character]["name"], 
-            value=character, 
+        options=[discord.SelectOption(
+            label=character_info[character]["name"],
+            value=character,
             description=character_info[character]["description"]) for character in character_info.keys()
         ]
     )
     async def select_callback(self, interaction, select):
         await interaction.response.defer()
         self.value = select.values[0]
-        self.stop()        
+        self.stop()
+
 
 class User:
     def __init__(self, id, conversation_path, debug=False):
         self.id = id
-        self.conversation = Conversation(id, conversation_path, limit=5, debug=debug)
+        self.conversation = CharacterConversation(
+            id, conversation_path, limit=5, debug=debug)
         self.count = 0
 
     # These user objects should be accessible by ID, for example if we had a bunch of user
@@ -60,85 +63,118 @@ class User:
     def __str__(self):
         return self.__repr__()
 
+
 class Conversation:
     """
     A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts.
-    
-    Parameters:
-    - user (User): The user id that this conversation is associated with.
-    - character (str): The character value (Koto, Nijika...) that the user is chatting with.
-    - limit (int): The maximum number of messages to store in the conversation deque history.
-    - debug (bool): Don't record conversation history if debug.
+
+    Attributes:
+    - messages (list): A list of messages for sending api request to OpenAI gpt-3.5-turbo.
     """
-    def __init__(self, user, character, limit=5, debug=False) -> None:
-        with open(os.path.join(character_info[character]["path"], "intro.txt")) as f:
-            self.intro = f.read()
-        with open(os.path.join(character_info[character]["path"], "conversation.txt")) as f:
-            self.prior_conv = f.read()
-        
+
+    def __init__(self, limit=10, debug=False) -> None:
         self.debug = debug
-        self.conv = deque(maxlen=limit)
-        self.conv_history = []
-        self.label = f"{user}-{character}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        self.name = character_info[character]["name"]
-    
-    def render(self):
-        active_conv = ""
-        for p, c in self.conv:
-            active_conv += self.render_conversation(p, c)
-        return self.intro + self.prior_conv + active_conv
-    
-    def render_conversation(self, prompt, message):
-        return f"人類: {prompt}\n{self.name}: {message}\n"
-    
+        # generate random string txt file name
+        dummy_file_name = ''.join(random.choices(
+            "abcdefghijklmnopqrstuvwxyz", k=10))
+        self.log_path = f"assets/logs/conv_history/{dummy_file_name}.txt"
+        self.system_messages = None
+        self.messages = deque(maxlen=limit)
+
+    def init_system_message(self, message):
+        self.system_messages = {"role": "system", "content": message}
+        self._write_log()
+
     def prepare_prompt(self, prompt):
-        return self.render() + f"人類: {prompt}\n{self.name}: "
-    
-    def append_conversation(self, prompt, message):
-        self.conv.append((prompt, message))
-        self.conv_history.append((prompt, message))
-        if not self.debug:
-            self.write_log()
-    
-    def write_log(self):
-        conv = ""
-        for p, c in self.conv_history:
-            conv += self.render_conversation(p, c)
+        '''Get the user input and append it to prompt body. Return the prompt body.'''
+        if self.system_messages is None:
+            raise Exception("System message not found.")
+        self.messages.append({"role": "user", "content": prompt})
+        self._write_log()
+        return [self.system_messages] + list(self.messages)
 
-        with open(f"assets/logs/conv_history/{self.label}.txt", "w", encoding="utf-8") as f:
-            f.write(conv)
-    
+    def append_response(self, response):
+        '''Get the assistant response and append it to prompt body.'''
+        if self.system_messages is None:
+            raise Exception("System message not found.")
+        self.messages.append({"role": "assistant", "content": response})
+        self._write_log()
+
+    def _write_log(self):
+        with open(self.log_path, "w", encoding="utf-8") as f:
+            json.dump([self.system_messages] + list(self.messages),
+                      f, indent=4, ensure_ascii=False)
+
     def __len__(self):
-        return get_token_len(self.render())
-    
-    def __repr__(self) -> str:
-        return self.render()
-    
-    def __str__(self) -> str:
-        return self.render()
+        return num_tokens_from_messages(list(self.messages))
 
-def get_token_len(text):
-    return len(tokenizer(text)["input_ids"])
-        
+    def __repr__(self) -> str:
+        return json.dumps(list(self.messages), indent=4, ensure_ascii=False)
+
+    def __str__(self) -> str:
+        return json.dumps(list(self.messages), indent=4, ensure_ascii=False)
+
+
+class CharacterConversation(Conversation):
+    """
+    A class to store the conversation history. Conversation source should be stored in a folder inside assets/texts.
+
+    Attributes:
+    - messages (list): A list of messages for sending api request to OpenAI gpt-3.5-turbo.
+    """
+
+    def __init__(self, user, character, limit=10, debug=False) -> None:
+        super().__init__(limit, debug)
+        label = f"{user}-{character}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.log_path = f"assets/logs/conv_history/{label}.txt"
+        self.name = character_info[character]["name"]
+
+        with open(os.path.join(character_info[character]["path"], "intro.txt")) as f:
+            self.init_system_message(f.read())
+        with open(os.path.join(character_info[character]["path"], "conversation.txt")) as f:
+            example_chats = f.read().splitlines()
+            for chat in example_chats:
+                u, a = chat.split(",", 1)
+                self.messages.append(
+                    {"role": "user", "content": u.strip("\n")})
+                self.messages.append(
+                    {"role": "assistant", "content": a.strip("\n")})
+
+
+def num_tokens_from_messages(messages, model="gpt-3.5-turbo"):
+    """Returns the number of tokens used by a list of messages."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    if model == "gpt-3.5-turbo":  # note: future models may deviate from this
+        num_tokens = 0
+        for message in messages:
+            # every message follows <im_start>{role/name}\n{content}<im_end>\n
+            num_tokens += 4
+            for key, value in message.items():
+                num_tokens += len(encoding.encode(value))
+                if key == "name":  # if there's a name, the role is omitted
+                    num_tokens += -1  # role is always required and always 1 token
+        num_tokens += 2  # every reply is primed with <im_start>assistant
+        return num_tokens
+    else:
+        raise NotImplementedError(f"""num_tokens_from_messages() is not presently implemented for model {model}.
+See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens.""")
+
+
 async def generate_conversation(prompt):
     """
-    Requests a completion from the OpenAI Text-DaVinci-002 model and returns the completion as a string.
+    Requests a completion from the OpenAI gpt-3.5-turbo model and returns the completion as a string.
 
     Parameters:
-    - prompt (str): The prompt for which to generate a completion.
+    - prompt (list): A list of messages for sending api request to OpenAI gpt-3.5-turbo.
 
     Returns:
     - completion (str): The completion generated by the model.
     """
-    completions = await sync_to_async(openai.Completion.create)(
-        engine="text-davinci-003",
-        prompt=prompt,
-        max_tokens=150,
-        temperature=0.9,
-        top_p=1,
-        frequency_penalty=0,
-        presence_penalty=0.6,
-        stop=["\n", " 人類:"]
+    completions = await sync_to_async(openai.ChatCompletion.create)(
+        model="gpt-3.5-turbo",
+        messages=prompt,
     )
-    message = completions.choices[0].text
-    return message
+    return completions['choices'][0]['message']['content']

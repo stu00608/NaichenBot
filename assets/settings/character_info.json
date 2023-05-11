@@ -26,7 +26,13 @@
     "Shen": {
         "path": "assets/conversations/Shen",
         "name": "沈奕辰",
-        "description": "可以聽你傾訴煩惱的奶辰",
+        "description": "太鼓玩家奶辰",
         "greeting": "嗨～"
+    },
+    "Teacher": {
+        "path": "assets/conversations/Teacher",
+        "name": "心理諮商師",
+        "description": "可以引導你想法的心理諮商師",
+        "greeting": "你好"
     }
 }

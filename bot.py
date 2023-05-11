@@ -28,24 +28,28 @@ class Bot(commands.Bot):
 
         intents = discord.Intents.default()
         intents.members = True
+        intents.guild_messages = True
+        intents.guilds = True
+        intents.guild_reactions = True
         intents.message_content = True
 
         super().__init__(
-            command_prefix=commands.when_mentioned_or('!'), 
+            command_prefix=commands.when_mentioned_or('!'),
             intents=intents,
             description="Naichen bot.",
-            activity=discord.Activity(type=discord.ActivityType.listening, name="後藤さんの呪いだわ..."),
+            activity=discord.Activity(
+                type=discord.ActivityType.listening, name="後藤さんの呪いだわ..."),
             status=discord.Status.online
         )
 
         self.day_avatar = "assets/img/day_bocchi.jpg"
         self.night_avatar = "assets/img/night_bocchi.jpg"
-        
+
         self.init_avatar()
 
     async def on_ready(self):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
-    
+
     async def setup_hook(self) -> None:
         """Setup hook for bot startup. This is called before the bot starts the main loop."""
         self.update_avatar.start()
@@ -59,12 +63,14 @@ class Bot(commands.Bot):
         if is_day:
             with open(self.day_avatar, 'rb') as image:
                 asyncio.get_event_loop().create_task(self.user.edit(avatar=image.read()))
-                logger.info(f'{self.user} changed its avatar to {self.day_avatar}!')
+                logger.info(
+                    f'{self.user} changed its avatar to {self.day_avatar}!')
                 self.day_night_state = "day"
         else:
             with open(self.night_avatar, 'rb') as image:
                 asyncio.get_event_loop().create_task(self.user.edit(avatar=image.read()))
-                logger.info(f'{self.user} changed its avatar to {self.night_avatar}!')
+                logger.info(
+                    f'{self.user} changed its avatar to {self.night_avatar}!')
                 self.day_night_state = "night"
 
     def init_avatar(self):
@@ -73,13 +79,12 @@ class Bot(commands.Bot):
         day_time = datetime.strptime(DAY_TIME, "%H:%M")
         night_time = datetime.strptime(NIGHT_TIME, "%H:%M")
         day_time = now.replace(hour=day_time.hour, minute=day_time.minute)
-        night_time = now.replace(hour=night_time.hour, minute=night_time.minute)
+        night_time = now.replace(hour=night_time.hour,
+                                 minute=night_time.minute)
         if day_time < now < night_time:
             self.day_night_state = "day"
         else:
             self.day_night_state = "night"
-        
-        
 
     @tasks.loop(seconds=10)
     async def update_avatar(self):
@@ -98,12 +103,13 @@ class Bot(commands.Bot):
 async def load_extensions():
     """Load all extensions in ./cogs/"""
     for f in os.listdir("./cogs"):
-	    if f.endswith(".py"):
-		    await bot.load_extension("cogs." + f[:-3])
+        if f.endswith(".py"):
+            await bot.load_extension("cogs." + f[:-3])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode. (Default: False)')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug mode. (Default: False)')
     args = parser.parse_args()
 
     bot = Bot(debug=args.debug)
