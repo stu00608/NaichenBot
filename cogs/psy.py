@@ -4,19 +4,19 @@ This file contains a cog for AI psychotherapy assistant commands.
 
 import os
 import json
+import time
 import asyncio
 import openai
 import discord
 from discord.ui import View, Button
 from discord.ext import commands
-from assets.utils.chat import User, Conversation, generate_conversation, num_tokens_from_messages
+from asgiref.sync import sync_to_async
+from assets.utils.chat import Conversation, generate_conversation, num_tokens_from_messages
 import assets.settings.setting as setting
 
 logger = setting.logging.getLogger("psy")
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# TODO: Make the chat response load in stream.
 
 
 class PsyGPT(commands.Cog):
@@ -55,7 +55,7 @@ class PsyGPT(commands.Cog):
 
     def write_database(self):
         json.dump(self.database, open(
-            self.database_path, "w", encoding="utf-8"))
+            self.database_path, "w", encoding="utf-8"), indent=4)
 
     @commands.Cog.listener()
     async def on_message(self, ctx):
@@ -93,8 +93,18 @@ class PsyGPT(commands.Cog):
 
                 logger.info(f"Saved user {user_discriminator}'s data.")
 
-                # TODO: Analyze the answers here.
+                # TODO: Analyze the qa and make a report here.
+                # Pseudo code:
+                report = await personality_analyze(
+                    self.database[user_discriminator]["questions"],
+                    self.database[user_discriminator]["answers"],
+                    debug=self.bot.debug
+                )
+                self.database[user_discriminator]["report"] = report
+
+                # TODO: Analyze the qa and generate a chat system prompt.
                 self.database[user_discriminator]["chat_system_message"] = "你是一位熱於助人的AI助理，你的名字叫做奶辰，你是一位軟體工程師，若人類詢問你和軟體技術相關的問題，請你將人類的需求拆成一個個小問題，並且將這些問題的答案組合起來成最佳解答，回答人類的問題，並且告訴人類為何你的答案是最佳解答。確保你的答案是正確的，並且不會對人類造成傷害。若人類與你道別，請一律回答“掰掰”。若遇到專有名詞可以使用原文並以繁體中文解釋輔助，其餘請全程使用繁體中文回答。"
+
                 self.write_database()
 
                 await ctx.channel.send("分析已完成！將於5秒後自動關閉此討論串。")
@@ -126,25 +136,50 @@ class PsyGPT(commands.Cog):
                     if self.bot.debug:
                         if ctx.content == "掰掰":
                             # Debuging chat exit function
-                            completion = "掰掰"
+                            full_reply_content = "掰掰"
                         else:
                             # Debuging reply function
-                            completion = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
+                            full_reply_content = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
                     else:
-                        completion = await generate_conversation(prompt)
+                        start_time = time.time()
+                        response = await sync_to_async(openai.ChatCompletion.create)(
+                            model="gpt-3.5-turbo",
+                            messages=prompt,
+                            stream=True
+                        )
+                        collected_messages = []
+                        message = None
+                        for chunk in response:
+                            chunk_time = time.time() - start_time  # calculate the time delay of the chunk
+                            # extract the message
+                            chunk_message = chunk['choices'][0]['delta']
+                            collected_messages.append(
+                                chunk_message)  # save the message
+                            if chunk_time > 3.0:
+                                full_reply_content = ''.join(
+                                    [m.get('content', '') for m in collected_messages])
+                                if message:
+                                    await message.edit(content=full_reply_content)
+                                else:
+                                    message = await ctx.channel.send(full_reply_content)
+                                start_time = time.time()
+
+                        full_reply_content = ''.join(
+                            [m.get('content', '') for m in collected_messages])
+                        await message.edit(content=full_reply_content)
+
             except Exception as e:
                 logger.error(f"Failed to generate conversation: {e}")
                 await ctx.reply(f"生成對話時發生錯誤：{e}")
 
-            if completion == "":
+            if full_reply_content == "":
                 await ctx.reply("沒有生成任何回應。")
                 return
 
-            conv.append_response(completion)
-            await ctx.channel.send(completion)
+            conv.append_response(full_reply_content)
 
             # If the bot reply with "掰掰", end the conversation
-            if "掰掰" in completion:
+            if "掰掰" in full_reply_content:
                 logger.debug("Quitting Chat...")
                 await asyncio.sleep(3)
                 del self.chatting_threads[ctx.author.id]
@@ -161,12 +196,6 @@ class PsyGPT(commands.Cog):
 
     @commands.hybrid_command(name="analyze", description="Analyze your personality.")
     async def _analyze(self, ctx):
-        """
-        One user will start from this command to build their personality data. This command will do following things:
-        1. Create a thread for the user to answer questions.
-        2. Store the answers into a database.
-        3. Analyze the answers and store it in the database.
-        """
         await ctx.defer()
 
         user_id = ctx.author.id
@@ -215,9 +244,9 @@ class PsyGPT(commands.Cog):
             await ctx.send(f"你已經在 <#{thread.id}> 裡面開始了分析。")
             return
 
+        msg = await ctx.send("已開始分析")
         thread = await ctx.channel.create_thread(
-            name=f"{ctx.author.name} 的分析", auto_archive_duration=60)
-        await ctx.send(f"已開始分析，請在 <#{thread.id}> 裡面回答問題。")
+            name=f"{ctx.author.name} 的分析", message=msg, auto_archive_duration=60)
         self.questionnaire_threads[user_id] = {
             "thread_id": thread.id,
             "counter": 0
@@ -237,12 +266,13 @@ class PsyGPT(commands.Cog):
             await ctx.send("你還沒有進行分析！")
             return
 
-        thread_name = ctx.author.name + f"{user_discriminator} 與自己的聊天室"
+        msg = await ctx.send("已開始分析")
+        thread_name = f"{user_discriminator} 與自己的聊天室"
         thread = await ctx.channel.create_thread(
             name=thread_name,
+            message=msg,
             auto_archive_duration=60,
         )
-        await ctx.send(f"已開始聊天，請在 <#{thread.id}> 裡面開始聊天。")
 
         self.load_database()
         conversation = Conversation()
@@ -266,7 +296,7 @@ class PsyGPT(commands.Cog):
             return
 
         user_discriminator = ctx.author.name + "#" + ctx.author.discriminator
-        user_data = self.database[user_discriminator]["answers"]
+        user_data = self.database[user_discriminator]["report"]
 
         await ctx.author.send(user_data)
 
@@ -281,6 +311,31 @@ class PsyGPT(commands.Cog):
         except Exception as e:
             logger.error(f"Failed to close thread {id} with error {e}")
             return False
+
+
+async def personality_analyze(questions: list, answers: list, debug: bool = False):
+    """Analyze the user's personality by their answers.
+
+    Args:
+        questions (list): A list of questions.
+        answers (list): A list of answers.
+
+    Returns:
+        string: A string contains the user's personality report.
+    """
+
+    # Example to use Conversation and generate_conversation to call OpenAI ChatGPT API.
+    conv = Conversation()
+    conv.init_system_message("Test system message.")
+
+    prompt = conv.prepare_prompt(questions + answers)
+
+    if not debug:
+        completion = await generate_conversation(prompt)
+    else:
+        completion = "Debug message"
+
+    return completion
 
 
 async def setup(client):
