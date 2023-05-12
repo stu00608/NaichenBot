@@ -166,7 +166,10 @@ class PsyGPT(commands.Cog):
 
                         full_reply_content = ''.join(
                             [m.get('content', '') for m in collected_messages])
-                        await message.edit(content=full_reply_content)
+                        if message:
+                            await message.edit(content=full_reply_content)
+                        else:
+                            message = await ctx.channel.send(full_reply_content)
 
             except Exception as e:
                 logger.error(f"Failed to generate conversation: {e}")
