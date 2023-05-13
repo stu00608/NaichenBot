@@ -329,10 +329,13 @@ async def personality_analyze(questions: list, answers: list, debug: bool = Fals
 
     # Example to use Conversation and generate_conversation to call OpenAI ChatGPT API.
     conv = Conversation()
-    conv.init_system_message("Test system message.")
-
-    prompt = conv.prepare_prompt(questions + answers)
-
+    conv.init_system_message("請你作為一個資料整合師幫我分析問答並且依照以下格式進行輸出\n1.基本資料\n姓名 :\n來自 :\n工作 :\n家庭關係狀況 :\n朋友關係裝況 :\n興趣 :\n2.人格特質\n經驗的開放性 : 好奇或謹慎\n盡責性 : 高效或奢侈\n外向性 : 外向或內向\n親和性 : 友好或批判\n神經質 : 緊張或自信\n3.對於這次諮商想要聊的事情")
+    promptString = ""
+    for i, question in enumerate(questions):
+        promptString += f"{i+1}. {question}"
+    for i, answer in enumerate(answers):
+        promptString += f"{i+1}. {answer}"
+    prompt = conv.prepare_prompt(promptString)
     if not debug:
         completion = await generate_conversation(prompt)
     else:
