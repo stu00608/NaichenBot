@@ -1,2 +1,5 @@
 __pycache__/
 assets/logs/conv_history/*.txt
+assets/database/
+assets/logs/
+.vscode/
