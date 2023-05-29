@@ -16,6 +16,7 @@ from discord.ext import commands
 from asgiref.sync import sync_to_async
 from assets.utils.chat import Conversation, generate_conversation, num_tokens_from_messages
 from assets.utils.google_form import create_form
+from assets.utils.questionnaire_statistic import process_all_user_response
 import assets.settings.setting as setting
 
 logger = setting.logging.getLogger("psy")
@@ -580,6 +581,24 @@ class PsyGPT(commands.Cog):
             await ctx.author.send(f"你的問卷連結：{form_url}")
 
         await ctx.send(f"<@{user_id}> 已將問卷連結私訊給你。")
+
+    @commands.has_permissions(administrator=True)
+    @commands.hybrid_command(name="statistic", description="Analyze current data and return a statistic report. (Admins only)")
+    async def _statistic(self, ctx):
+        await ctx.defer()
+
+        async with ctx.channel.typing():
+            output_folder_path = await sync_to_async(process_all_user_response)(
+                self.database_path,
+                overwrite=True,
+            )
+
+            # Find every .png files in output_folder_path and dm to user
+            for file in os.listdir(output_folder_path):
+                if file.endswith(".png"):
+                    await ctx.author.send(file=discord.File(os.path.join(output_folder_path, file)))
+
+        await ctx.send("已將統計結果私訊給你。")
 
 
 async def personality_analyze(questions: list, answers: list, ctx, debug: bool = False, return_usage: bool = False):

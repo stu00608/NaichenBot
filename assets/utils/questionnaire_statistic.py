@@ -101,6 +101,82 @@ def analyze_data(data, column_names, output_folder_path="./assets/database/psygp
         plot_column(df, name, output_file_path=output_file_path)
 
 
+def process_all_user_response(
+        database_folder_path: str = "./assets/database/psygpt_database/",
+        form_ans_token_path: str = "./assets/credentials/form_ans_token.json",
+        client_secrets_path: str = "./assets/credentials/client_secret.json",
+        questionnaire_template_path: str = "./assets/database/questionnaire_template.json",
+        question_ids_path: str = "./assets/database/question_ids.json",
+        statistics_folder_path: str = "./assets/database/psygpt_statistics/",
+        overwrite: bool = False,
+):
+    # Loop through all .json files that not start with "old_" in args.database_folder_path, store the abs path into a list
+    user_response_json_paths = [os.path.join(database_folder_path, file_name) for file_name in os.listdir(
+        database_folder_path) if file_name.endswith(".json") and not file_name.startswith("old_")]
+
+    global_questions = None
+    global_answers = []
+
+    for user_response_json_path in user_response_json_paths:
+        user_id = os.path.basename(user_response_json_path).split(".")[0]
+        print(f"Processing {user_id}...")
+
+        # Check if `form_questions` and `form_answers` are already in the json file
+        user_response_json_data = json.load(
+            open(user_response_json_path, 'r', encoding='utf-8'))
+
+        if 'form_id' not in user_response_json_data or \
+            'form_url' not in user_response_json_data or \
+            'form_questions' not in user_response_json_data or \
+                'form_answers' not in user_response_json_data:
+            print("Missing form_id, form_url, form_questions or form_answers")
+            continue
+
+        # Get questions and answers from Google Form or from the json file
+        if 'form_questions' in user_response_json_data and \
+            'form_answers' in user_response_json_data and \
+            'form_questions_ids' in user_response_json_data and \
+                not overwrite:
+            questions = user_response_json_data['form_questions']
+            answers = user_response_json_data['form_answers']
+            questions_ids = user_response_json_data['form_questions_ids']
+
+            if global_questions == None:
+                global_questions = questions
+            elif global_questions != questions:
+                print("Found different version of questions")
+                continue
+
+            # Check if questions_ids is equal to the one in args.question_ids_path json data
+            if questions_ids != json.load(open(question_ids_path, 'r', encoding='utf-8')):
+                print("Found different version of questions_ids")
+                continue
+        else:
+            questions, answers = get_form(user_response_json_data['form_id'],
+                                          form_ans_token_path=form_ans_token_path,
+                                          client_secrets_path=client_secrets_path,
+                                          questionnaire_template_path=questionnaire_template_path,
+                                          question_ids_path=question_ids_path)
+            if questions == None or answers == None:
+                continue
+            elif global_questions == None:
+                global_questions = questions
+            elif global_questions != questions:
+                print("Found different version of questions")
+                continue
+            questions_ids = json.load(
+                open(question_ids_path, 'r', encoding='utf-8'))
+
+        global_answers.append(answers)
+
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    output_folder_path = os.path.join(statistics_folder_path, today)
+    print(global_questions, global_answers)
+    analyze_data(global_answers, global_questions[:13],
+                 output_folder_path=output_folder_path)
+    return output_folder_path
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
@@ -125,55 +201,13 @@ if __name__ == "__main__":
         # print(json.dumps(data, indent=4))
         analyze_data(data, [str(i) for i in range(13)])
         exit(0)
-
-    # Loop through all .json files that not start with "old_" in args.database_folder_path, store the abs path into a list
-    user_response_json_paths = [os.path.join(args.database_folder_path, file_name) for file_name in os.listdir(
-        args.database_folder_path) if file_name.endswith(".json") and not file_name.startswith("old_")]
-
-    global_questions = None
-    global_answers = []
-
-    for user_response_json_path in user_response_json_paths:
-        user_id = os.path.basename(user_response_json_path).split(".")[0]
-        print(f"Processing {user_id}...")
-
-        # Check if `form_questions` and `form_answers` are already in the json file
-        user_response_json_data = json.load(
-            open(user_response_json_path, 'r', encoding='utf-8'))
-
-        # Get questions and answers from Google Form or from the json file
-        if 'form_questions' in user_response_json_data and \
-            'form_answers' in user_response_json_data and \
-            'form_questions_ids' in user_response_json_data and \
-                not args.overwrite:
-            questions = user_response_json_data['form_questions']
-            answers = user_response_json_data['form_answers']
-            questions_ids = user_response_json_data['form_questions_ids']
-
-            if global_questions == None:
-                global_questions = questions
-            elif global_questions != questions:
-                print("Found different version of questions")
-                continue
-
-            # Check if questions_ids is equal to the one in args.question_ids_path json data
-            if questions_ids != json.load(open(args.question_ids_path, 'r', encoding='utf-8')):
-                print("Found different version of questions_ids")
-                continue
-        else:
-            questions, answers = get_form(user_id,
-                                          form_ans_token_path=args.form_ans_token_path,
-                                          client_secrets_path=args.client_secrets_path,
-                                          questionnaire_template_path=args.questionnaire_template_path,
-                                          question_ids_path=args.question_ids_path)
-            if questions == None or answers == None:
-                continue
-            questions_ids = json.load(
-                open(args.question_ids_path, 'r', encoding='utf-8'))
-
-        global_answers.append(answers)
-
-    today = datetime.datetime.now().strftime("%Y%m%d")
-    output_folder_path = os.path.join(args.statistics_folder_path, today)
-    analyze_data(global_answers, global_questions[:13],
-                 output_folder_path=output_folder_path)
+    else:
+        process_all_user_response(
+            database_folder_path=args.database_folder_path,
+            form_ans_token_path=args.form_ans_token_path,
+            client_secrets_path=args.client_secrets_path,
+            questionnaire_template_path=args.questionnaire_template_path,
+            question_ids_path=args.question_ids_path,
+            statistics_folder_path=args.statistics_folder_path,
+            overwrite=args.overwrite,
+        )
