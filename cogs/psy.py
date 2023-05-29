@@ -15,6 +15,7 @@ from discord.ui import View, Button
 from discord.ext import commands
 from asgiref.sync import sync_to_async
 from assets.utils.chat import Conversation, generate_conversation, num_tokens_from_messages
+from assets.utils.google_form import create_form
 import assets.settings.setting as setting
 
 logger = setting.logging.getLogger("psy")
@@ -553,6 +554,32 @@ class PsyGPT(commands.Cog):
         except Exception as e:
             logger.error(f"Failed to close thread {id} with error {e}")
             return False
+
+    @commands.hybrid_command(name="questionnaire", description="Get your personal questionnaire link (Google Form).")
+    async def _create_questionnaire(self, ctx):
+        """Return the user's personality report by dm."""
+        await ctx.defer()
+        user_id = str(ctx.author.id)
+
+        if user_id+".json" not in os.listdir(self.database_path):
+            await ctx.send("你還沒有進行分析！")
+            return
+
+        async with ctx.channel.typing():
+            form_id, form_url = await sync_to_async(create_form)(
+                user_id,
+                database_folder_path=self.database_path
+            )
+            user_data = self.load_database(user_id)
+
+            user_data['form_id'] = form_id
+            user_data['form_url'] = form_url
+
+            self.write_database(user_id, user_data)
+
+            await ctx.author.send(f"你的問卷連結：{form_url}")
+
+        await ctx.send(f"<@{user_id}> 已將問卷連結私訊給你。")
 
 
 async def personality_analyze(questions: list, answers: list, ctx, debug: bool = False, return_usage: bool = False):
