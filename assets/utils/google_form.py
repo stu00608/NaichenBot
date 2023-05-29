@@ -20,7 +20,7 @@ form_ans_scopes = ["https://www.googleapis.com/auth/forms.responses.readonly"]
 discovery_doc = "https://forms.googleapis.com/$discovery/rest?version=v1"
 
 
-def get_form_object(token_path, scopes) -> Resource:
+def get_form_object(token_path, scopes, client_secrets_path: str = "./assets/credentials/client_secret.json") -> Resource:
     credentials = None
     if os.path.exists(token_path):
         credentials = Credentials.from_authorized_user_file(
@@ -110,6 +110,7 @@ def create_form(
     database_folder_path: str = "./assets/database/psygpt_database/",
     form_auth_token_path: str = "./assets/credentials/form_auth_token.json",
     questionnaire_template_path: str = "./assets/database/questionnaire_template.json",
+    client_secrets_path: str = "./assets/credentials/client_secret.json",
 ):
     user_response_json_path = os.path.join(
         database_folder_path, discord_id+".json")
@@ -122,7 +123,8 @@ def create_form(
             f"User {discord_id} has already created a form, form id is {user_response_json_data['form_id']}\nPlease go to {user_response_json_data['form_url']} to submit the questionnaire.")
         return user_response_json_data['form_id'], user_response_json_data['form_url']
 
-    form_object = get_form_object(form_auth_token_path, form_auth_scopes)
+    form_object = get_form_object(
+        form_auth_token_path, form_auth_scopes, client_secrets_path=client_secrets_path)
     form = form_object.forms().create(body=form_template).execute()
 
     questionnaire_template_data = json.load(
@@ -139,8 +141,10 @@ def get_form(
     form_ans_token_path: str = "./assets/credentials/form_ans_token.json",
     questionnaire_template_path: str = "./assets/database/questionnaire_template.json",
     question_ids_path: str = "./assets/database/question_ids.json",
+    client_secrets_path: str = "./assets/credentials/client_secret.json",
 ):
-    form_object = get_form_object(form_ans_token_path, form_ans_scopes)
+    form_object = get_form_object(form_ans_token_path, form_ans_scopes,
+                                  client_secrets_path=client_secrets_path)
     result = form_object.forms().responses().list(formId=form_id).execute()
 
     if 'responses' not in result:
@@ -177,7 +181,9 @@ if __name__ == "__main__":
         form_id, url = create_form(args.id,
                                    database_folder_path=args.database_folder_path,
                                    form_auth_token_path=args.form_auth_token_path,
-                                   questionnaire_template_path=args.questionnaire_template_path)
+                                   questionnaire_template_path=args.questionnaire_template_path,
+                                   client_secrets_path=args.client_secrets_path
+                                   )
         print(f"\tYour form id is {form_id}\n\tYour form url is {url}")
 
         if args.inplace:
@@ -196,8 +202,12 @@ if __name__ == "__main__":
             args.database_folder_path, args.id+".json")
         user_response_json_data = json.load(
             open(user_response_json_path, 'r', encoding='utf-8'))
-        questions, answers = get_form(user_response_json_data['form_id'], form_ans_token_path=args.form_ans_token_path,
-                                      questionnaire_template_path=args.questionnaire_template_path, question_ids_path=args.question_ids_path)
+        questions, answers = get_form(user_response_json_data['form_id'],
+                                      form_ans_token_path=args.form_ans_token_path,
+                                      questionnaire_template_path=args.questionnaire_template_path,
+                                      question_ids_path=args.question_ids_path,
+                                      client_secrets_path=args.client_secrets_path,
+                                      )
         print(f"Questions: \n\n{questions}\n\nAnswers: \n\n{answers}\n")
 
         if args.inplace:
