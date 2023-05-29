@@ -9,6 +9,8 @@ from googleapiclient.errors import HttpError
 from googleapiclient.discovery import Resource
 from apiclient import discovery
 
+# TODO: The list question_ids.json can extract from questionnaire_template.json automatically
+
 form_template = {
     "info": {
         "title": "諮商回饋單",
@@ -145,7 +147,11 @@ def get_form(
 ):
     form_object = get_form_object(form_ans_token_path, form_ans_scopes,
                                   client_secrets_path=client_secrets_path)
-    result = form_object.forms().responses().list(formId=form_id).execute()
+    try:
+        result = form_object.forms().responses().list(formId=form_id).execute()
+    except HttpError as error:
+        print("No such form id, please check again.")
+        return None, None
 
     if 'responses' not in result:
         print("Questionnaire has no response yet, please try again once a user completed.")
@@ -210,9 +216,14 @@ if __name__ == "__main__":
                                       )
         print(f"Questions: \n\n{questions}\n\nAnswers: \n\n{answers}\n")
 
+        if questions == None or answers == None:
+            exit(0)
+
         if args.inplace:
             user_response_json_data['form_questions'] = questions
             user_response_json_data['form_answers'] = answers
+            user_response_json_data['form_questions_ids'] = json.load(
+                open(args.question_ids_path, 'r', encoding='utf-8'))
             with open(user_response_json_path, 'w', encoding='utf-8') as f:
                 json.dump(user_response_json_data, f,
                           ensure_ascii=False, indent=4)
