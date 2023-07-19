@@ -126,9 +126,7 @@ def process_all_user_response(
             open(user_response_json_path, 'r', encoding='utf-8'))
 
         if 'form_id' not in user_response_json_data or \
-            'form_url' not in user_response_json_data or \
-            'form_questions' not in user_response_json_data or \
-                'form_answers' not in user_response_json_data:
+                'form_url' not in user_response_json_data:
             print("Missing form_id, form_url, form_questions or form_answers")
             continue
 
@@ -171,6 +169,9 @@ def process_all_user_response(
 
     today = datetime.datetime.now().strftime("%Y%m%d")
     output_folder_path = os.path.join(statistics_folder_path, today)
+    if global_questions == None:
+        print("No user response found")
+        return None
     print(global_questions, global_answers)
     analyze_data(global_answers, global_questions[:13],
                  output_folder_path=output_folder_path)

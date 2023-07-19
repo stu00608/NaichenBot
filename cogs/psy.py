@@ -31,8 +31,6 @@ smart_qa_system_message = """You are a psychotherapist having a pre-counseling a
 - Medical History: Physical health conditions, surgeries, medications impacting mental health, and any psychological symptoms caused by physical conditions or medication side effects.
 - Social History: Patient's childhood, education, work history, relationships, and current living situation to understand sources of stress, trauma, and support.
 - Family History: Any significant mental health conditions or problems in the patient's family, including genetic factors and family dynamics.
-- Risk Assessment: Identification of any risk factors to the patient or others, such as suicidal ideation, self-harm, or violence.
-- Strengths and Coping Mechanisms: Patient's personal strengths, supportive relationships, and healthy coping mechanisms to incorporate into the treatment plan.
 - Goals for Therapy: Patient's specific or general aspirations for therapy, whether focused on reducing symptoms, improving mood, or enhancing overall functioning.
 
 You keep chatting with individual like a conversation with friend until you collect enough information, be very friendly and kindly.
@@ -159,6 +157,20 @@ You must respond in Traditional Chinese with valid JSON of form:
     return prompt
 
 
+def make_chat_prompt(name, background, chat_style):
+    return f"""I want you to act like {name}. 
+Here is the background and chat style for {name}:
+
+Background: {background}
+Chat Style: {chat_style}
+
+I want you to respond and answer like {name} using the tone, manner and vocabulary {name} would use. 
+Do not write any explanations. 
+Only answer like {name}. 
+Only respond from the facts you know about {name}.
+You only respond in Traditional Chinese."""
+
+
 def format_report_response(response: dict) -> str:
     """Format the response dictionary values to a Markdown string."""
     markdown = "# {} 的分析報告\n\n## 個人資料\n{}\n\n## 想要解決的問題\n{}\n\n## 問題的緣由\n{}\n\n## 精神病史\n{}\n\n## 疾病歷史\n{}\n\n## 社交歷史\n{}\n\n## 家庭歷史\n{}\n\n## 風險評估\n{}\n\n## 優勢與應對機制\n{}\n\n## 治療目標\n{}\n\n## 遺漏資訊\n{}\n\n---\n\n## 聊天風格\n{}\n\n## 背景描述\n{}\n".format(
@@ -202,18 +214,18 @@ class PsyGPT(commands.Cog):
             if not os.path.exists(filepath):
                 logger.info(
                     f"Database file {filepath} does not exist. Creating one...")
-                with open(filepath, "w") as f:
+                with open(filepath, "w", encoding="utf-8") as f:
                     json.dump({}, f)
         except Exception as e:
             logger.error(
                 f"Failed to load database: {e}, {traceback.format_exc()}")
             return None
-        return json.load(open(filepath, "r"))
+        return json.load(open(filepath, "r", encoding="utf-8"))
 
     def write_database(self, id: str, database: dict):
         filepath = os.path.join(self.database_path, f"{id}.json")
         try:
-            json.dump(database, open(filepath, "w"), indent=4)
+            json.dump(database, open(filepath, "w", encoding="utf-8"), indent=4)
         except Exception as e:
             logger.error(
                 f"Failed to write database: {e}, {traceback.format_exc()}")
@@ -349,12 +361,13 @@ class PsyGPT(commands.Cog):
                 and ctx.channel.id == self.chatting_threads[ctx.author.id]["thread_id"]:
             # Chatting thread
 
+            # Delete any message inside this thread that is not belong to the bot or the user.
+            async for msg in ctx.channel.history(limit=None, oldest_first=True):
+                if msg.author.id != ctx.author.id and msg.author.id != self.bot.user.id:
+                    await msg.delete()
+
             conv = self.chatting_threads[ctx.author.id]["conversation"]
             prompt = conv.prepare_prompt(ctx.content)
-
-            if self.bot.debug:
-                logger.debug(f"\n\n{conv}\n\n")
-                logger.debug(f"Tokens: {num_tokens_from_messages(prompt)}")
 
             if num_tokens_from_messages(prompt) > 3500:
                 await ctx.reply("對話過長，請重新開始對話。")
@@ -362,6 +375,7 @@ class PsyGPT(commands.Cog):
                 await self.close_thread(ctx.channel.id)
                 return
 
+            full_reply_content = ""
             try:
                 async with ctx.channel.typing():
                     if self.bot.debug:
@@ -373,11 +387,28 @@ class PsyGPT(commands.Cog):
                             full_reply_content = "這是一個測試回應。為了避免過度使用 OpenAI API，這個回應是從本地讀取的。"
                     else:
                         start_time = time.time()
-                        response = await sync_to_async(openai.ChatCompletion.create)(
-                            model="gpt-3.5-turbo",
-                            messages=prompt,
-                            stream=True
-                        )
+                        while True:
+                            try:
+                                response = await sync_to_async(openai.ChatCompletion.create)(
+                                    model="gpt-3.5-turbo",
+                                    messages=prompt,
+                                    stream=True
+                                )
+                                break
+                            except openai.error.RateLimitError as e:
+                                print(
+                                    "Rate limit reached. Waiting 10 seconds and retry...")
+                                time.sleep(10)
+                            except openai.error.APIError as e:
+                                print("API error. Waiting 10 seconds and retry...")
+                                time.sleep(10)
+                            except Exception as e:
+                                print(
+                                    "Unknown error. Waiting 10 seconds and retry...")
+                                traceback.print_exc()
+                                self.chatting_threads[ctx.author.id]["conversation"] = self.chatting_threads[
+                                    ctx.author.id]["last_conversation"]
+                                return None, None
                         collected_messages = []
                         message = None
                         for chunk in response:
@@ -404,20 +435,30 @@ class PsyGPT(commands.Cog):
 
             except Exception as e:
                 logger.error(f"Failed to generate conversation: {e}")
-                await ctx.reply(f"生成對話時發生錯誤：{e}")
+                # await ctx.reply(f"生成對話時發生錯誤：{e}")
+                await ctx.reply(f"請重試一次")
+                self.chatting_threads[ctx.author.id]["conversation"] = self.chatting_threads[
+                    ctx.author.id]["last_conversation"]
+                return
 
             if full_reply_content == "":
                 await ctx.reply("沒有生成任何回應。")
+                self.chatting_threads[ctx.author.id]["conversation"] = self.chatting_threads[
+                    ctx.author.id]["last_conversation"]
                 return
 
             conv.append_response(full_reply_content)
 
             # If the bot reply with "掰掰", end the conversation
-            if "掰掰" in full_reply_content:
-                logger.debug("Quitting Chat...")
-                await asyncio.sleep(3)
-                del self.chatting_threads[ctx.author.id]
-                await self.close_thread(ctx.channel.id)
+            for byebye in ["掰掰", "再見"]:
+                if byebye in full_reply_content:
+                    logger.debug("Quitting Chat...")
+                    await asyncio.sleep(3)
+                    del self.chatting_threads[ctx.author.id]
+                    await self.close_thread(ctx.channel.id)
+                    break
+
+            self.chatting_threads[ctx.author.id]["last_conversation"] = self.chatting_threads[ctx.author.id]["conversation"]
 
     @commands.command(name="update_psygpt_api_key")
     @commands.has_permissions(administrator=True)
@@ -428,7 +469,7 @@ class PsyGPT(commands.Cog):
         openai.api_key = key
         await ctx.send(f"Updated OpenAI API key")
 
-    @commands.hybrid_command(name="analyze", description="Analyze your personality.")
+    @commands.hybrid_command(name="分析", description="和AI對話，探索自我")
     async def _analyze(self, ctx):
         await ctx.defer()
 
@@ -500,7 +541,7 @@ class PsyGPT(commands.Cog):
         }
         await thread.send(self.questionnaire_threads[user_id]["greeting"])
 
-    @commands.hybrid_command(name="self_chat", description="Chat with you. Yes, you.")
+    @commands.hybrid_command(name="與自己聊天", description="和你自己對話")
     async def _self_chat(self, ctx):
         await ctx.defer()
         user_id = ctx.author.id
@@ -510,26 +551,64 @@ class PsyGPT(commands.Cog):
             await ctx.send("你還沒有進行分析！")
             return
 
-        await ctx.send("WIP...")
+        if user_id in self.chatting_threads:
+            thread_id = self.chatting_threads[user_id]
+            try:
+                thread = await self.bot.fetch_channel(thread_id)
+            except Exception as e:
+                # If the thread has been deleted, remove the thread from the dictionary.
+                del self.chatting_threads[user_id]
+                await ctx.send("請重新開始一次。")
+                return
+            await ctx.send(f"你已經在 <#{thread.id}> 裡面開始了聊天。")
+            return
 
-        # msg = await ctx.send("已開始分析")
-        # thread_name = f"{user_discriminator} 與自己的聊天室"
-        # thread = await ctx.channel.create_thread(
-        #     name=thread_name,
-        #     message=msg,
-        #     auto_archive_duration=60,
-        # )
+        user_data = self.load_database(user_id)
 
-        # TODO: Ingect chat prompt
-        # conversation = Conversation()
-        # conversation.init_system_message(
-        #     self.database[user_discriminator]["chat_system_message"])
-        # self.chatting_threads[ctx.author.id] = {
-        #     "thread_id": thread.id,
-        #     "conversation": conversation
-        # }
+        if 'chat_style' not in user_data or \
+            'background_description' not in user_data or \
+            'report' not in user_data or \
+                'name' not in user_data['report']:
+            await ctx.send("你還沒有進行分析！")
+            logger.error(
+                f"JSON format error\n{json.dumps(user_data, indent=4)}")
+            return
 
-    @commands.hybrid_command(name="report", description="Get your personality report.")
+        conversation = Conversation()
+        log_file_name = f"{user_id}_{datetime.datetime.now().strftime('%Y%m%d%H%M')}.log"
+        log_path = "./assets/logs/psygpt_chat_log/"
+        os.makedirs(log_path, exist_ok=True)
+        conversation.set_log_path(
+            os.path.join(log_path, log_file_name)
+        )
+        conversation.init_system_message(make_chat_prompt(
+            name=user_data['report']['name'],
+            background=user_data['background_description'],
+            chat_style=user_data['chat_style'])
+        )
+
+        msg = await ctx.send("已開始聊天")
+        thread_name = f"{user_discriminator} 與自己的聊天室"
+        thread = await ctx.channel.create_thread(
+            name=thread_name,
+            message=msg,
+            auto_archive_duration=60,
+        )
+
+        self.chatting_threads[ctx.author.id] = {
+            "thread_id": thread.id,
+            "conversation": conversation,
+            "last_conversation": conversation,
+        }
+
+        if 'chat_logs' not in user_data:
+            user_data['chat_logs'] = []
+
+        user_data['chat_logs'].append(
+            os.path.join(log_path, log_file_name)
+        )
+
+    @commands.hybrid_command(name="報告", description="取得AI為你整理的分析")
     async def _report(self, ctx):
         """Return the user's personality report by dm."""
         await ctx.defer()
@@ -556,7 +635,7 @@ class PsyGPT(commands.Cog):
             logger.error(f"Failed to close thread {id} with error {e}")
             return False
 
-    @commands.hybrid_command(name="questionnaire", description="Get your personal questionnaire link (Google Form).")
+    @commands.hybrid_command(name="問卷", description="獲取個人問卷連結 (Google 表單).")
     async def _create_questionnaire(self, ctx):
         """Return the user's personality report by dm."""
         await ctx.defer()
@@ -583,7 +662,7 @@ class PsyGPT(commands.Cog):
         await ctx.send(f"<@{user_id}> 已將問卷連結私訊給你。")
 
     @commands.has_permissions(administrator=True)
-    @commands.hybrid_command(name="statistic", description="Analyze current data and return a statistic report. (Admins only)")
+    @commands.hybrid_command(name="統計", description="視覺化問卷結果 (僅限管理員)")
     async def _statistic(self, ctx):
         await ctx.defer()
 
