@@ -3,6 +3,7 @@ import time
 import json
 import openai
 import random
+import asyncio
 import discord
 import tiktoken
 import traceback
@@ -82,6 +83,9 @@ class Conversation:
         self.log_path = f"assets/logs/conv_history/{dummy_file_name}.txt"
         self.system_messages = None
         self.messages = deque(maxlen=limit)
+
+    def set_log_path(self, path):
+        self.log_path = path
 
     def init_system_message(self, message):
         self.system_messages = {"role": "system", "content": message}
@@ -177,10 +181,10 @@ async def generate_conversation(prompt: list, model: str = "gpt-3.5-turbo", temp
             break
         except openai.error.RateLimitError as e:
             print("Rate limit reached. Waiting 10 seconds and retry...")
-            time.sleep(10)
+            await asyncio.sleep(10)
         except openai.error.APIError as e:
             print("API error. Waiting 10 seconds and retry...")
-            time.sleep(10)
+            await asyncio.sleep(10)
         except Exception as e:
             print("Unknown error. Waiting 10 seconds and retry...")
             traceback.print_exc()
