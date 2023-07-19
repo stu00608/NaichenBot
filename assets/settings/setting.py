@@ -52,6 +52,11 @@ LOGGING_CONFIG = {
             "level": "DEBUG",
             "propagate": False
         },
+        "rvc": {
+            'handlers': ['console', "file"],
+            "level": "DEBUG",
+            "propagate": False
+        },
         "discord": {
             'handlers': ['console2', "file"],
             "level": "INFO",

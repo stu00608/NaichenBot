@@ -3,4 +3,5 @@ assets/logs/conv_history/*.txt
 assets/database/
 assets/credentials/
 assets/logs/
+assets/settings/rvc.json
 .vscode/
