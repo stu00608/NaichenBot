@@ -46,6 +46,7 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
 
     output_file_path = os.path.join(output_dir, f"{title}.{audio_format}")
     output_file_path = output_file_path.replace(" ", "_")
+    output_file_path = output_file_path.replace("　", "_")
 
     if not overwrite:
         if os.path.exists(output_file_path):
@@ -259,6 +260,85 @@ def merge_tracks(*audio_file_list, output_path):
     return output_path
 
 
+def singing_conversion_cli(vocal_path, output_path, inst_path=None, transposition=0, gain=2, overwrite=False, return_vocal=False):
+    infer_vocal_path = rvc_inference(
+        vocal_path, f"assets/database/rvc/rvc_output/{os.path.basename(vocal_path).split('.')[0]}_rvc_output.flac", overwrite=overwrite, transposition=transposition)
+    if infer_vocal_path is None:
+        logger.error("RVC inference failed")
+        return None
+
+    if gain != 0:
+        infer_vocal_path = audio_gain(
+            infer_vocal_path, "assets/database/rvc/temp/gained_vocal.flac", gain)
+        if infer_vocal_path is None:
+            logger.error("Audio gain failed")
+            return None
+
+    # if inst_path is a valid file path
+    if inst_path is not None and os.path.exists(inst_path):
+        result_path = merge_tracks(
+            infer_vocal_path, inst_path, output_path=output_path)
+        if result_path is None:
+            logger.error("Merge tracks failed")
+            return None
+    else:
+        # Convert infer_vocal_path to mp3 and move, rename to output_path
+        result_path = convert_audio(infer_vocal_path, "mp3")
+        if result_path is None:
+            logger.error("Convert infer vocal failed")
+            return None
+        shutil.move(result_path, output_path)
+        result_path = output_path
+
+    if return_vocal:
+        return result_path, infer_vocal_path
+    else:
+        return result_path
+
+
+def singing_conversion_from_url(user_id, vocal_url, inst_url, output_path, transposition=0, gain=2, overwrite=False):
+    # vocal_url should be a direct link to download audio file, download it and save to assets/database/rvc/upload/{user_id}/vocal_{the name of the uploaded file}.{the format of the uploaded file},
+    try:
+        response = requests.get(vocal_url, stream=True)
+        vocal_path = f"assets/database/rvc/upload/{user_id}/vocal_{os.path.basename(vocal_url).split('.')[0]}.{os.path.basename(vocal_url).split('.')[1]}"
+        os.makedirs(os.path.dirname(vocal_path), exist_ok=True)
+        with open(vocal_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+    except Exception as e:
+        logger.error(e)
+        return "download_failed"
+    assert os.path.exists(
+        vocal_path), f"Expected Vocal output file {os.path.basename(vocal_url)} not found in {vocal_path}"
+
+    inst_path = None
+    if inst_url is not None:
+        try:
+            response = requests.get(inst_url, stream=True)
+            inst_path = f"assets/database/rvc/upload/{user_id}/inst_{os.path.basename(inst_url).split('.')[0]}.{os.path.basename(inst_url).split('.')[1]}"
+            os.makedirs(os.path.dirname(inst_path), exist_ok=True)
+            with open(inst_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024):
+                    if chunk:
+                        f.write(chunk)
+        except Exception as e:
+            logger.error(e)
+            return "download_failed"
+        assert os.path.exists(
+            inst_path), f"Expected Instrument output file {os.path.basename(inst_url)} not found in {inst_path}"
+
+    result_path = singing_conversion_cli(
+        vocal_path, output_path, inst_path, transposition, gain, overwrite)
+
+    assert result_path == output_path, f"Expected output file {output_path} not found in {result_path}"
+
+    if result_path is None:
+        return "rvc_inference_failed"
+
+    return result_path
+
+
 def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwrite=False, should_be_echo=True):
     start_time = time.time()
     print("Start singing conversion from youtube")
@@ -285,22 +365,17 @@ def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwr
     else:
         clean_vocal_path = vocal_path
 
-    infer_vocal_path = rvc_inference(
-        clean_vocal_path, f"assets/database/rvc/rvc_output/{music_name}_rvc_output.flac", overwrite=overwrite, transposition=transposition)
-    if infer_vocal_path is None:
+    result_path, infer_vocal_path = singing_conversion_cli(
+        vocal_path=clean_vocal_path,
+        output_path=output_path,
+        inst_path=inst_path,
+        transposition=transposition,
+        gain=gain,
+        overwrite=overwrite,
+        return_vocal=True
+    )
+    if infer_vocal_path is None or result_path is None:
         logger.error("RVC inference failed")
-        return None, None, None, None
-
-    gained_infer_vocal_path = audio_gain(
-        infer_vocal_path, "assets/database/rvc/temp/gained_vocal.flac", gain)
-    if gained_infer_vocal_path is None:
-        logger.error("Audio gain failed")
-        return None, None, None, None
-
-    result_path = merge_tracks(
-        gained_infer_vocal_path, inst_path, output_path=output_path)
-    if result_path is None:
-        logger.error("Merge tracks failed")
         return None, None, None, None
 
     converted_infer_vocal_path = convert_audio(infer_vocal_path, "mp3")
@@ -387,7 +462,6 @@ class SingingConversionModal(ui.Modal, title="歌聲轉換"):
         overwrite_value = True if self.overwrite.value == "y" else False
         should_be_echo_value = True if self.should_de_echo.value == "y" else False
 
-        # TODO: Make a embed to show the preview of youtube video.
         await interaction.response.send_message(f"開始轉換...\n\n\t音高轉換：{transposition_value}\n\t增益：{gain_value}\n\t重新運算：{overwrite_value}\n\n來源網址：{self.url.value}")
 
         self.cog.inference_lock = True
@@ -410,14 +484,29 @@ class RVCInferenceCog(commands.Cog):
         self.inference_lock = False
 
     @commands.hybrid_command(name="歌聲轉換", description="將youtube上的歌唱音樂轉成AI角色演唱！")
-    async def _rvc_singing_conversion(self, ctx):
+    async def _rvc_singing_conversion(self, ctx, vocal_url=None, inst_url=None, transposition=0, gain=2, overwrite=False):
         if self.inference_lock:
             await ctx.send("正在處理，請稍後再試...")
             return
-        await ctx.send("請選擇歌聲轉換的方式", view=SingingConversionModalView(ctx, self))
 
-    # TODO: Implement a version is to upload vocal and instrumental file to discord and do the inference
-    # (it should be able to inference without instrumental file, then just return vocal back).
+        # if vocal_url passed, then use CLI mode.
+        if vocal_url is not None:
+            # CLI Mode
+            self.inference_lock = True
+            async with ctx.typing():
+                result_path = await sync_to_async(singing_conversion_from_url)(
+                    ctx.author.id, vocal_url, inst_url, "assets/database/rvc/result.mp3", transposition, gain, overwrite
+                )
+            if result_path == "download_failed":
+                await ctx.send("下載音樂失敗，請稍後再試，或者聯繫管理員")
+            elif result_path == "rvc_inference_failed":
+                await ctx.send("歌聲轉換失敗，請稍後再試，或者聯繫管理員")
+            else:
+                await ctx.send("歌聲轉換完成！", file=discord.File(result_path))
+            self.inference_lock = False
+        else:
+            # GUI Mode
+            await ctx.send("請選擇歌聲轉換的方式", view=SingingConversionModalView(ctx, self))
 
 
 async def setup(client):
