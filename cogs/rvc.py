@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import requests
 from discord.interactions import Interaction
-import youtube_dl
 from discord.ext import commands
 from discord import ui
 import discord
@@ -21,7 +20,7 @@ import assets.settings.setting as setting
 config = json.load(
     open("assets/settings/rvc.json", "r", encoding="utf-8"))
 
-logger = setting.logging.getLogger("psy")
+logger = setting.logging.getLogger("rvc")
 
 dataset_cleaner_workspace = config["dataset_cleaner_workspace"]
 rvc_workspace = config["rvc_workspace"]
@@ -30,11 +29,19 @@ executor = ThreadPoolExecutor(max_workers=5)
 
 
 def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite=False):
+    command = [
+        'yt-dlp',
+        '--no-playlist',
+        '--skip-download',
+        '-j',  # Output info as JSON
+        url,
+    ]
     try:
-        title = youtube_dl.YoutubeDL().extract_info(
-            url, download=False)['title']
-    except youtube_dl.DownloadError as e:
-        logger.error(e)
+        output = subprocess.check_output(command)
+        video_info = json.loads(output)
+        title = video_info.get('title')
+    except subprocess.CalledProcessError as e:
+        logger.error(f"yt-dlp download error: {e.output.decode()}")
         return None
     except Exception as e:
         logger.error(e)
