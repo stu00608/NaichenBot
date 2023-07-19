@@ -13,7 +13,6 @@ from discord.ext import commands
 from discord import ui
 import discord
 from asgiref.sync import sync_to_async
-from concurrent.futures import ThreadPoolExecutor
 import assets.settings.setting as setting
 
 
@@ -24,8 +23,6 @@ logger = setting.logging.getLogger("rvc")
 
 dataset_cleaner_workspace = config["dataset_cleaner_workspace"]
 rvc_workspace = config["rvc_workspace"]
-
-executor = ThreadPoolExecutor(max_workers=5)
 
 
 def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite=False):
@@ -226,14 +223,10 @@ def audio_gain(audio_path, output_path, gain):
 
     # Construct the ffmpeg command
     command = ["ffmpeg", "-i", audio_path, "-af",
-               f"volume={gain}", "-y", output_path]
+               f"volume={gain}dB", "-y", output_path]
 
     # Execute the command
-    try:
-        subprocess.run(command, check=True)
-    except Exception as e:
-        logger.error(e)
-        return None
+    subprocess.run(command, check=True)
 
     # Check that the output file was created
     assert os.path.exists(
@@ -266,7 +259,7 @@ def merge_tracks(*audio_file_list, output_path):
     return output_path
 
 
-def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwrite=False):
+def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwrite=False, should_be_echo=True):
     start_time = time.time()
     print("Start singing conversion from youtube")
     path = download_audio(
@@ -283,11 +276,14 @@ def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwr
         logger.error("Vocal split failed")
         return None, None, None, None
 
-    clean_vocal_path = vocal_echo_remove(
-        vocal_path, "assets/database/rvc/echo_removed", overwrite=overwrite)
-    if clean_vocal_path is None:
-        logger.error("Echo remove failed")
-        return None, None, None, None
+    if should_be_echo:
+        clean_vocal_path = vocal_echo_remove(
+            vocal_path, "assets/database/rvc/echo_removed", overwrite=overwrite)
+        if clean_vocal_path is None:
+            logger.error("Echo remove failed")
+            return None, None, None, None
+    else:
+        clean_vocal_path = vocal_path
 
     infer_vocal_path = rvc_inference(
         clean_vocal_path, f"assets/database/rvc/rvc_output/{music_name}_rvc_output.flac", overwrite=overwrite, transposition=transposition)
@@ -343,9 +339,13 @@ class SingingConversionModal(ui.Modal, title="歌聲轉換"):
                        placeholder="https://www.youtube.com/watch?v=...",
                        required=True)
     transposition = ui.TextInput(
-        label="請輸入音高轉換(男->女 12, 女->男 -12, 不變 0)", placeholder="0", default="0")
-    gain = ui.TextInput(label="請輸入音量增益", placeholder="2", default="2")
-    overwrite = ui.TextInput(label="請輸入是否覆蓋(y/n)", placeholder="n", default="n")
+        label="請輸入音高轉換", placeholder="男->女 12, 女->男 -12, 不變 0", default="0")
+    should_de_echo = ui.TextInput(
+        label="是否要對來源人聲去回音、殘響", placeholder="(y/n)", default="y")
+    gain = ui.TextInput(
+        label="請輸入音量增益(-20 ~ 20)", placeholder="0>>不變，1>>增加1dB，-1>>減少1db", default="2")
+    overwrite = ui.TextInput(label="是否重新運算",
+                             placeholder="(y/n)", default="n")
 
     def __init__(self, ctx, cog):
         super().__init__(timeout=60)
@@ -385,12 +385,13 @@ class SingingConversionModal(ui.Modal, title="歌聲轉換"):
             await interaction.response.send_message("音量增益必須介於-20到20之間", ephemeral=True)
             return
         overwrite_value = True if self.overwrite.value == "y" else False
+        should_be_echo_value = True if self.should_de_echo.value == "y" else False
 
         # TODO: Make a embed to show the preview of youtube video.
         await interaction.response.send_message(f"開始轉換...\n\n\t音高轉換：{transposition_value}\n\t增益：{gain_value}\n\t重新運算：{overwrite_value}\n\n來源網址：{self.url.value}")
 
         self.cog.inference_lock = True
-        result_path, infer_vocal_path, inst_path, time_elapsed = await sync_to_async(singing_conversion_from_yt)(self.url.value, "assets/database/rvc/result.mp3", transposition_value, gain_value, overwrite_value)
+        result_path, infer_vocal_path, inst_path, time_elapsed = await sync_to_async(singing_conversion_from_yt)(self.url.value, "assets/database/rvc/result.mp3", transposition_value, gain_value, overwrite_value, should_be_echo_value)
         if result_path is None or infer_vocal_path is None or inst_path is None or time_elapsed is None:
             msg = await interaction.original_response()
             await msg.edit(content="歌聲轉換失敗，請稍後再試，或者聯繫管理員")
@@ -400,35 +401,6 @@ class SingingConversionModal(ui.Modal, title="歌聲轉換"):
             await self.ctx.send("Vocal Only", file=discord.File(infer_vocal_path))
             await self.ctx.send("Instrument Only", file=discord.File(inst_path))
         self.cog.inference_lock = False
-        # future = executor.submit(
-        #     singing_conversion_from_yt, self.url.value, "assets/database/rvc/result.mp3", transposition_value, gain_value, overwrite_value)
-        # future.add_done_callback(self.singing_conversion_from_yt_callback)
-
-    def singing_conversion_from_yt_callback(self, future):
-        result_path, infer_vocal_path, inst_path, time_elapsed = future.result()
-
-        if result_path is None or infer_vocal_path is None or inst_path is None or time_elapsed is None:
-            self.cog.bot.loop.create_task(self.send_msg_to_channel(
-                self.ctx, "歌聲轉換失敗，請稍後再試，或者聯繫管理員"))
-        else:
-            self.cog.bot.loop.create_task(self.send_result_to_channel(
-                self.ctx, result_path, infer_vocal_path, inst_path, time_elapsed))
-            # Send the file from result_path to the channel
-        self.cog.inference_lock = False
-
-    async def send_msg_to_channel(self, ctx, msg):
-        await ctx.send(msg)
-
-    async def send_result_to_channel(self, ctx, result_path, infer_vocal_path, inst_path, time_elapsed):
-        await ctx.send(
-            f"歌聲轉換完成！", file=discord.File(result_path))
-        await ctx.send(
-            f"原始音檔：", file=discord.File(infer_vocal_path))
-        await ctx.send(
-            f"原始伴奏：", file=discord.File(inst_path))
-        await ctx.send(
-            f"花費時間：{time_elapsed}秒"
-        )
 
 
 class RVCInferenceCog(commands.Cog):
