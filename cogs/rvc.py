@@ -21,7 +21,6 @@ config = json.load(
 
 logger = setting.logging.getLogger("rvc")
 
-dataset_cleaner_workspace = config["dataset_cleaner_workspace"]
 rvc_workspace = config["rvc_workspace"]
 
 
@@ -29,6 +28,7 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
     command = [
         'yt-dlp',
         '--no-playlist',
+        '--restrict-filenames',
         '--skip-download',
         '-j',  # Output info as JSON
         url,
@@ -36,7 +36,8 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
     try:
         output = subprocess.check_output(command)
         video_info = json.loads(output)
-        title = video_info.get('title')
+        # Get video id
+        video_id = video_info.get('id')
     except subprocess.CalledProcessError as e:
         logger.error(f"yt-dlp download error: {e.output.decode()}")
         return None
@@ -44,9 +45,7 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
         logger.error(e)
         return None
 
-    output_file_path = os.path.join(output_dir, f"{title}.{audio_format}")
-    output_file_path = output_file_path.replace(" ", "_")
-    output_file_path = output_file_path.replace("　", "_")
+    output_file_path = os.path.join(output_dir, f"{video_id}.{audio_format}")
 
     if not overwrite:
         if os.path.exists(output_file_path):
@@ -56,9 +55,11 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
     # Construct the command to be called
     command = [
         'yt-dlp',
+        '--no-playlist',
+        '--restrict-filenames',
         '-x',  # Extract audio
         '--audio-format', audio_format,
-        '-o', os.path.join(output_dir, '%(title)s.%(ext)s'),
+        '-o', os.path.join(output_dir, f'{video_id}.{audio_format}'),
         url
     ]
 
@@ -72,20 +73,23 @@ def download_audio(url, audio_format='flac', output_dir='ytdl_output', overwrite
 
     print('args:', result.args)
 
-    # Remove spaces from the file name
-    os.rename(os.path.join(
-        output_dir, f"{title}.{audio_format}"), output_file_path)
-
     print("Download audio end")
 
     return output_file_path
 
 
-def vocal_split(audio_path, output_dir, model_name="HP3_all_vocals.pth", agg=10, overwrite=False):
+def vocal_split(audio_path, output_dir, model_name="HP3_all_vocals", agg=10, overwrite=False, audio_format="flac"):
     audio_path = os.path.abspath(audio_path)
     base_name = os.path.basename(audio_path)
-    vocal_expected_output_file = f"vocal_{base_name}_{agg}.flac"
-    inst_expected_output_file = f"instrument_{base_name}_{agg}.flac"
+    if model_name.endswith(".pth"):
+        model_name = model_name[:-4]
+
+    if model_name in ["HP3_all_vocals", "VR-DeEchoAggressive"]:
+        vocal_expected_output_file = f"instrument_{base_name}.reformatted.wav_{agg}.flac"
+        inst_expected_output_file = f"vocal_{base_name}.reformatted.wav_{agg}.flac"
+    else:
+        vocal_expected_output_file = f"vocal_{base_name}.reformatted.wav_{agg}.flac"
+        inst_expected_output_file = f"instrument_{base_name}.reformatted.wav_{agg}.flac"
 
     if not overwrite:
         if os.path.exists(os.path.join(output_dir, vocal_expected_output_file)) and os.path.exists(os.path.join(output_dir, inst_expected_output_file)):
@@ -94,11 +98,13 @@ def vocal_split(audio_path, output_dir, model_name="HP3_all_vocals.pth", agg=10,
 
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
-    command = ["python", "dataset_cleaner.py", "remove_bgm", "--input_dir",
-               audio_path, "--output_dir", output_dir, "--model_name", model_name, "--agg", str(agg), "--export_both"]
+    command = ["python", "infer-web.py", "--pycmd", "python",
+               "--simple_cli", "uvr", "--uvr5_weight_name", model_name,
+               "--source_audio_path", audio_path, "--agg", str(agg), "--format", audio_format]
+
     print(f"Running command: {command}")
     try:
-        result = subprocess.run(command, cwd=dataset_cleaner_workspace,
+        result = subprocess.run(command, cwd=rvc_workspace,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as e:
         logger.error(e)
@@ -111,50 +117,35 @@ def vocal_split(audio_path, output_dir, model_name="HP3_all_vocals.pth", agg=10,
 
     vocal_result_path = os.path.join(output_dir, vocal_expected_output_file)
     inst_result_path = os.path.join(output_dir, inst_expected_output_file)
-    assert os.path.exists(
-        vocal_result_path), f"Expected Vocal output file {vocal_expected_output_file} not found in {output_dir}"
-    assert os.path.exists(
-        inst_result_path), f"Expected Instrument output file {inst_expected_output_file} not found in {output_dir}"
+
+    try:
+        shutil.move(os.path.join(rvc_workspace,
+                                 "uvr5_outputs",
+                                 "inst" if model_name in [
+                                     "HP3_all_vocals"] else "vocal",
+                                 vocal_expected_output_file),
+                    vocal_result_path)
+        shutil.move(os.path.join(rvc_workspace,
+                                 "uvr5_outputs",
+                                 "vocal" if model_name in [
+                                     "HP3_all_vocals"] else "inst",
+                                 inst_expected_output_file),
+                    inst_result_path)
+    except Exception as e:
+        logger.error(f"Error while moving files after uvr inference: {e}")
+        return None, None
+    try:
+        assert os.path.exists(
+            vocal_result_path), f"Expected Vocal output file {vocal_expected_output_file} not found in {output_dir}"
+        assert os.path.exists(
+            inst_result_path), f"Expected Instrument output file {inst_expected_output_file} not found in {output_dir}"
+    except Exception as e:
+        logger.error(e)
+        return None, None
 
     print("BGM removed successfully")
 
     return vocal_result_path, inst_result_path
-
-
-def vocal_echo_remove(audio_path, output_dir, agg=10, overwrite=False):
-    audio_path = os.path.abspath(audio_path)
-    base_name = os.path.basename(audio_path)
-    vocal_expected_output_file = f"vocal_{base_name}_{agg}.flac"
-
-    if not overwrite:
-        if os.path.exists(os.path.join(output_dir, vocal_expected_output_file)):
-            print("Skipping echo removal")
-            return os.path.join(output_dir, vocal_expected_output_file)
-
-    output_dir = os.path.abspath(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    command = ["python", "dataset_cleaner.py", "remove_echo", "--input_dir",
-               audio_path, "--output_dir", output_dir, "--agg", str(agg)]
-    print(f"Running command: {command}")
-    try:
-        result = subprocess.run(command, cwd=dataset_cleaner_workspace,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception as e:
-        logger.error(e)
-        return None
-
-    print('args:', result.args)
-    print('returncode:', result.returncode)
-    print('stdout:', result.stdout.decode())
-    print('stderr:', result.stderr.decode())
-
-    vocal_result_path = os.path.join(output_dir, vocal_expected_output_file)
-    assert os.path.exists(
-        vocal_result_path), f"Expected Vocal output file {vocal_expected_output_file} not found in {output_dir}"
-
-    print("Echo removed successfully")
-
-    return vocal_result_path
 
 
 def rvc_inference(audio_path, output_path, transposition=0, overwrite=False):
@@ -188,8 +179,13 @@ def rvc_inference(audio_path, output_path, transposition=0, overwrite=False):
     output_path = os.path.abspath(output_path)
     output_folder = os.path.dirname(output_path)
     os.makedirs(output_folder, exist_ok=True)
-    shutil.move(os.path.join(rvc_workspace, "audio-outputs",
-                "output.flac"), os.path.abspath(output_path))
+    try:
+        shutil.move(os.path.join(rvc_workspace, "audio-outputs",
+                    "output.flac"), os.path.abspath(output_path))
+    except Exception as e:
+        logger.error(e)
+        return None
+
     return os.path.abspath(output_path)
 
 
@@ -265,14 +261,14 @@ def singing_conversion_cli(vocal_path, output_path, inst_path=None, transpositio
         vocal_path, f"assets/database/rvc/rvc_output/{os.path.basename(vocal_path).split('.')[0]}_rvc_output.flac", overwrite=overwrite, transposition=transposition)
     if infer_vocal_path is None:
         logger.error("RVC inference failed")
-        return None
+        return None, None if return_vocal else None
 
     if gain != 0:
         infer_vocal_path = audio_gain(
             infer_vocal_path, "assets/database/rvc/temp/gained_vocal.flac", gain)
         if infer_vocal_path is None:
             logger.error("Audio gain failed")
-            return None
+            return None, None if return_vocal else None
 
     # if inst_path is a valid file path
     if inst_path is not None and os.path.exists(inst_path):
@@ -280,20 +276,17 @@ def singing_conversion_cli(vocal_path, output_path, inst_path=None, transpositio
             infer_vocal_path, inst_path, output_path=output_path)
         if result_path is None:
             logger.error("Merge tracks failed")
-            return None
+            return None, None if return_vocal else None
     else:
         # Convert infer_vocal_path to mp3 and move, rename to output_path
         result_path = convert_audio(infer_vocal_path, "mp3")
         if result_path is None:
             logger.error("Convert infer vocal failed")
-            return None
+            return None, None if return_vocal else None
         shutil.move(result_path, output_path)
         result_path = output_path
 
-    if return_vocal:
-        return result_path, infer_vocal_path
-    else:
-        return result_path
+    return (result_path, infer_vocal_path) if return_vocal else result_path
 
 
 def singing_conversion_from_url(user_id, vocal_url, inst_url, output_path, transposition=0, gain=2, overwrite=False):
@@ -351,22 +344,32 @@ def singing_conversion_from_yt(url, output_path, transposition=0, gain=2, overwr
     music_name = os.path.basename(path).split(".")[0]
 
     vocal_path, inst_path = vocal_split(
-        path, "assets/database/rvc/bgm_removed", overwrite=overwrite)
+        audio_path=path,
+        output_dir="assets/database/rvc/bgm_removed",
+        model_name="HP3_all_vocals",
+        agg=10,
+        overwrite=overwrite,
+        audio_format="flac",
+    )
     if vocal_path is None or inst_path is None:
-        logger.error("Vocal split failed")
+        logger.error("Vocal split failed (BGM remove)")
         return None, None, None, None
 
     if should_be_echo:
-        clean_vocal_path = vocal_echo_remove(
-            vocal_path, "assets/database/rvc/echo_removed", overwrite=overwrite)
-        if clean_vocal_path is None:
-            logger.error("Echo remove failed")
+        vocal_path, inst_path = vocal_split(
+            audio_path=path,
+            output_dir="assets/database/rvc/echo_removed",
+            model_name="VR-DeEchoAggressive",
+            agg=10,
+            overwrite=overwrite,
+            audio_format="flac",
+        )
+        if vocal_path is None or inst_path is None:
+            logger.error("Vocal split failed (Echo remove)")
             return None, None, None, None
-    else:
-        clean_vocal_path = vocal_path
 
     result_path, infer_vocal_path = singing_conversion_cli(
-        vocal_path=clean_vocal_path,
+        vocal_path=vocal_path,
         output_path=output_path,
         inst_path=inst_path,
         transposition=transposition,
